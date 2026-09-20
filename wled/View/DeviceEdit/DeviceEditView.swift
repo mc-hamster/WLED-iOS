@@ -4,7 +4,9 @@ struct DeviceEditView: View {
     @Environment(\.managedObjectContext) private var viewContext
 
     @StateObject private var viewModel: DeviceEditViewModel
+    @StateObject private var bleDiscoveryService = BleDiscoveryService()
     @ObservedObject private var device: DeviceWithState
+    @State private var showBlePicker = false
 
     init(device: DeviceWithState) {
         let context = device.device.managedObjectContext ?? PersistenceController.shared.container.viewContext
@@ -31,6 +33,53 @@ struct DeviceEditView: View {
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                 }
 
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Connection")
+                    Picker("Connection", selection: $viewModel.connectionType) {
+                        ForEach(DeviceConnectionType.allCases) { connectionType in
+                            Text(connectionType.displayName)
+                                .tag(connectionType)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text("Wi-Fi Address")
+                    TextField("Wi-Fi Address", text: $viewModel.wifiAddress)
+                        .keyboardType(.URL)
+                        .textFieldStyle(.roundedBorder)
+
+                    Divider()
+
+                    Text("Bluetooth")
+                    Button(viewModel.bleName.isEmpty ? "Select BLE Device" : viewModel.bleName) {
+                        showBlePicker = true
+                    }
+                    .buttonStyle(.bordered)
+
+                    if !viewModel.bleIdentifier.isEmpty {
+                        Text(viewModel.bleIdentifier)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Picker("BLE Security", selection: $viewModel.bleSecurityMode) {
+                        ForEach(BleSecurityMode.allCases) { mode in
+                            Text(mode.displayName)
+                                .tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    if viewModel.bleSecurityMode == .passkey {
+                        TextField("BLE Passkey", text: $viewModel.blePasskey)
+                            .keyboardType(.numberPad)
+                            .textFieldStyle(.roundedBorder)
+                        Text("If iOS shows a Bluetooth pairing prompt, enter this passkey in the system dialog.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Toggle("Hide this Device", isOn: $viewModel.hideDevice)
                     .padding(.trailing, 2)
                     .padding(.bottom)
@@ -50,7 +99,7 @@ struct DeviceEditView: View {
                 }
                 .padding(.bottom)
 
-                if (device.stateInfo != nil) {
+                if device.stateInfo != nil && device.device.preferredConnectionType == .wifi {
                     Card {
                         if ((device.availableUpdateVersion ?? "").isEmpty) {
                             DeviceNoUpdateAvailable(
@@ -78,6 +127,11 @@ struct DeviceEditView: View {
         }
         .navigationTitle("Edit Device")
         .navigationBarTitleDisplayMode(.large)
+        .sheet(isPresented: $showBlePicker) {
+            BlePeripheralPickerView(discoveryService: bleDiscoveryService) { peripheral in
+                viewModel.updateSelectedBlePeripheral(peripheral)
+            }
+        }
     }
 }
 
@@ -153,4 +207,3 @@ struct DeviceUpdateAvailable: View {
         DeviceEditView(device: PreviewData.onlineDevice)
     }
 }
-

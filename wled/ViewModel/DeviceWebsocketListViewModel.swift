@@ -16,8 +16,13 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
     @Published var showOfflineDevicesLast: Bool = false
     @Published var showHiddenDevices: Bool = false
 
-    var makeClient: (Device) -> WebsocketClient = { device in
-        WebsocketClient(device: device)
+    var makeClient: (Device) -> any DeviceConnectionClient = { device in
+        switch device.preferredConnectionType {
+        case .ble:
+            return BleClient(device: device)
+        case .wifi:
+            return WebsocketClient(device: device)
+        }
     }
 
     // MARK: - Private Properties
@@ -27,11 +32,9 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
     private let context: NSManagedObjectContext
     private var frc: NSFetchedResultsController<Device>!
     
-    // Map of MacAddress -> Client Wrapper
-    // We store the last known address to detect IP changes
     private struct ClientWrapper {
-        let client: WebsocketClient
-        let lastKnownAddress: String
+        let client: any DeviceConnectionClient
+        let configurationSignature: String
     }
     
     private var activeClients: [String: ClientWrapper] = [:]
@@ -107,20 +110,17 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
         
         // 2. Identify and create/update clients for new or changed devices
         for (mac, device) in newDeviceMap {
-            let address = device.address ?? ""
+            let configurationSignature = clientConfigurationSignature(for: device)
             
             if let existingWrapper = activeClients[mac] {
-                if existingWrapper.lastKnownAddress != address {
-                    // Address changed: Reconnect
-                    print("[ListVM] Address changed for \(mac). Recreating client.")
+                if existingWrapper.configurationSignature != configurationSignature {
+                    print("[ListVM] Connection config changed for \(mac). Recreating client.")
                     existingWrapper.client.destroy()
                     createAndAddClient(for: device, mac: mac)
                 } else {
-                    // Just a regular update (e.g. name changed), the ObservableObject DeviceWithState handles this automatically
-                    // because it holds the reference to the Core Data object.
+                    // Device object changes are already observed by DeviceWithState.
                 }
             } else {
-                // New Device
                 print("[ListVM] Device added: \(mac). Creating client.")
                 createAndAddClient(for: device, mac: mac)
             }
@@ -142,8 +142,18 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
         
         activeClients[mac] = ClientWrapper(
             client: newClient,
-            lastKnownAddress: device.address ?? ""
+            configurationSignature: clientConfigurationSignature(for: device)
         )
+    }
+
+    private func clientConfigurationSignature(for device: Device) -> String {
+        [
+            device.preferredConnectionType.rawValue,
+            device.address ?? "",
+            device.bleIdentifier ?? "",
+            device.bleSecurityMode ?? "",
+            device.blePasskey ?? ""
+        ].joined(separator: "|")
     }
 
     private func handleDeviceUpdate(deviceID: NSManagedObjectID, info: DeviceStateInfo) {

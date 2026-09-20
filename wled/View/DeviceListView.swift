@@ -33,7 +33,7 @@ struct DeviceListView: View {
     // Allow injecting a specific context (defaulting to shared for the actual app)
     init(
         context: NSManagedObjectContext = PersistenceController.shared.container.viewContext,
-        clientFactory: ((Device) -> WebsocketClient)? = nil
+        clientFactory: ((Device) -> any DeviceConnectionClient)? = nil
     ) {
         let viewModel = DeviceWebsocketListViewModel(context: context)
         if let clientFactory = clientFactory {

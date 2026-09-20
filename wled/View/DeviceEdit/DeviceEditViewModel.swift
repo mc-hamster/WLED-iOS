@@ -17,6 +17,12 @@ class DeviceEditViewModel: ObservableObject {
 
     @Published var device: DeviceWithState
 
+    @Published var connectionType: DeviceConnectionType = .wifi
+    @Published var wifiAddress: String = ""
+    @Published var bleName: String = ""
+    @Published var bleIdentifier: String = ""
+    @Published var bleSecurityMode: BleSecurityMode = .systemDefault
+    @Published var blePasskey: String = ""
     @Published var customName: String = ""
     @Published var hideDevice: Bool = false
     @Published var branch: Branch = .unknown
@@ -26,16 +32,78 @@ class DeviceEditViewModel: ObservableObject {
     init(device: DeviceWithState, context: NSManagedObjectContext) {
         self.context = context
         self.device = device
+        connectionType = device.device.connectionTypeValue
+        wifiAddress = device.device.address ?? ""
+        bleName = device.device.bleName ?? ""
+        bleIdentifier = device.device.bleIdentifier ?? ""
+        bleSecurityMode = device.device.bleSecurityModeValue
+        blePasskey = device.device.blePasskey ?? ""
         customName = device.device.customName ?? ""
         hideDevice = device.device.isHidden
         branch = device.device.branchValue
 
+        setupConnectionTypeListener()
+        setupWifiAddressListener()
+        setupBleSecurityListener()
+        setupBlePasskeyListener()
         setupCustomNameDebouncedListener()
         setupHideDeviceListener()
         setupBranchListener()
     }
 
     // MARK: - Form change listeners
+
+    private func setupConnectionTypeListener() {
+        $connectionType
+            .removeDuplicates()
+            .sink { [weak self] newConnectionType in
+                guard let self = self else { return }
+                if self.device.device.connectionTypeValue != newConnectionType {
+                    self.device.device.connectionTypeValue = newConnectionType
+                    self.saveDevice()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func setupWifiAddressListener() {
+        $wifiAddress
+            .debounce(for: .seconds(0.5), scheduler: RunLoop.main)
+            .sink { [weak self] newAddress in
+                guard let self = self else { return }
+                if self.device.device.address != newAddress {
+                    self.device.device.address = newAddress
+                    self.saveDevice()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func setupBleSecurityListener() {
+        $bleSecurityMode
+            .removeDuplicates()
+            .sink { [weak self] mode in
+                guard let self = self else { return }
+                if self.device.device.bleSecurityModeValue != mode {
+                    self.device.device.bleSecurityModeValue = mode
+                    self.saveDevice()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func setupBlePasskeyListener() {
+        $blePasskey
+            .debounce(for: .seconds(0.5), scheduler: RunLoop.main)
+            .sink { [weak self] passkey in
+                guard let self = self else { return }
+                if self.device.device.blePasskey != passkey {
+                    self.device.device.blePasskey = passkey
+                    self.saveDevice()
+                }
+            }
+            .store(in: &cancellables)
+    }
 
     /// Saves the custom name every seconds when there are changes to the value
     private func setupCustomNameDebouncedListener() {
@@ -94,6 +162,14 @@ class DeviceEditViewModel: ObservableObject {
 
         device.device.skipUpdateTag = ""
         isCheckingForUpdates = false
+        saveDevice()
+    }
+
+    func updateSelectedBlePeripheral(_ peripheral: BleDiscoveredPeripheral) {
+        bleName = peripheral.name
+        bleIdentifier = peripheral.id.uuidString
+        device.device.bleName = peripheral.name
+        device.device.bleIdentifier = peripheral.id.uuidString
         saveDevice()
     }
 

@@ -11,37 +11,43 @@ struct DeviceView: View {
     @State var showEditDeviceView = false
 
     var body: some View {
-        ZStack {
-            WebView(url: getDeviceAddress(), reload: $shouldWebViewRefresh) { filePathDestination in
-                withAnimation {
-                    showDownloadFinished = true
-                }
-                Task {
-                    try await Task.sleep(for: .seconds(3))
-                    withAnimation {
-                        showDownloadFinished = false
+        Group {
+            if device.device.preferredConnectionType == .ble {
+                BleDeviceDetailView(device: device)
+                    .toolbar { toolbar }
+            } else {
+                ZStack {
+                    WebView(url: getDeviceAddress(), reload: $shouldWebViewRefresh) { filePathDestination in
+                        withAnimation {
+                            showDownloadFinished = true
+                        }
+                        Task {
+                            try await Task.sleep(for: .seconds(3))
+                            withAnimation {
+                                showDownloadFinished = false
+                            }
+                        }
+                    }
+                    if (showDownloadFinished) {
+                        VStack {
+                            Spacer()
+                            Text("Download Completed")
+                                .font(.title3)
+                                .padding()
+                                .background(.regularMaterial)
+                                .clipShape(RoundedRectangle(cornerRadius: 15))
+                                .padding(.bottom)
+                        }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(1)
                     }
                 }
-            }
-            if (showDownloadFinished) {
-                VStack {
-                    Spacer()
-                    Text("Download Completed")
-                        .font(.title3)
-                        .padding()
-                        .background(.regularMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 15))
-                        .padding(.bottom)
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .zIndex(1) // Ensures it stays on top during transition
+                .navigationTitle(device.device.displayName)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { toolbar }
             }
         }
-        .navigationTitle(device.device.displayName)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { toolbar }
     }
-
 
     @ToolbarContentBuilder
     var toolbar: some ToolbarContent {
@@ -53,13 +59,14 @@ struct DeviceView: View {
                 DeviceEditView(device: device)
             } label: {
                 Label("Settings", systemImage: "gear")
-                // This badge only works on iOS 26+, but that's fine.
                     .badge(getToolbarBadgeCount())
             }
         }
-        ToolbarItem(placement: .automatic) {
-            Button("Refresh", systemImage: "arrow.clockwise") {
-                shouldWebViewRefresh = true
+        if device.device.preferredConnectionType == .wifi {
+            ToolbarItem(placement: .automatic) {
+                Button("Refresh", systemImage: "arrow.clockwise") {
+                    shouldWebViewRefresh = true
+                }
             }
         }
     }

@@ -4,7 +4,7 @@ import Combine
 
 
 @MainActor
-class WebsocketClient: NSObject, ObservableObject, URLSessionWebSocketDelegate {
+class WebsocketClient: NSObject, ObservableObject, URLSessionWebSocketDelegate, DeviceConnectionClient {
     
     // MARK: - Properties
     

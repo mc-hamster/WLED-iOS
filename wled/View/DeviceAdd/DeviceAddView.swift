@@ -14,10 +14,16 @@ struct DeviceAddView: View {
                 case .form(let errorMessage):
                     DeviceAddStep1FormView(
                         viewModel: viewModel,
-                        errorMessage: errorMessage,
+                        errorMessage: errorMessage
                     )
                 case .adding:
-                    DeviceAddStep2LoadingView(address: viewModel.address)
+                    DeviceAddStep2LoadingView(
+                        connectionType: viewModel.connectionType,
+                        address: viewModel.address,
+                        bleName: viewModel.selectedBlePeripheral?.name,
+                        bleSecurityMode: viewModel.bleSecurityMode,
+                        blePasskey: viewModel.blePasskey
+                    )
                 case .success(let device):
                     DeviceAddStep3Success(device: device)
                 }
@@ -38,6 +44,7 @@ struct DeviceAddView: View {
                                 viewModel.submitCreateDevice()
                             }
                         }
+                        .disabled(!viewModel.canSubmit)
                     }
                 }
             }
@@ -60,23 +67,36 @@ struct DeviceAddStep1FormView: View {
 
     var body: some View {
         VStack(alignment: .leading) {
-            Text("IP Address or URL")
-            TextField("IP Address or URL", text: $viewModel.address)
-                .keyboardType(.URL)
-                .submitLabel(.done)
-                .textFieldStyle(.roundedBorder)
-                .focused($focusedField, equals: .address)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .stroke(
-                            errorMessage.isEmpty ? Color.clear : Color.red
-                        )
-                )
-                .onSubmit {
-                    withAnimation {
-                        viewModel.submitCreateDevice()
-                    }
+            Picker("Connection Type", selection: $viewModel.connectionType) {
+                ForEach(DeviceConnectionType.allCases) { connectionType in
+                    Text(connectionType.displayName)
+                        .tag(connectionType)
                 }
+            }
+            .pickerStyle(.segmented)
+
+            if viewModel.connectionType == .wifi {
+                Text("IP Address or URL")
+                TextField("IP Address or URL", text: $viewModel.address)
+                    .keyboardType(.URL)
+                    .submitLabel(.done)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: .address)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(
+                                errorMessage.isEmpty ? Color.clear : Color.red
+                            )
+                    )
+                    .onSubmit {
+                        withAnimation {
+                            viewModel.submitCreateDevice()
+                        }
+                    }
+            } else {
+                DeviceAddBleForm(viewModel: viewModel)
+            }
+
             if !errorMessage.isEmpty {
                 Text(errorMessage)
                     .foregroundStyle(.red)
@@ -93,16 +113,78 @@ struct DeviceAddStep1FormView: View {
     }
 }
 
+struct DeviceAddBleForm: View {
+    @ObservedObject var viewModel: DeviceAddViewModel
+    @State private var showBlePicker = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("BLE Device")
+            Button(viewModel.selectedBlePeripheral?.name ?? "Select BLE Device") {
+                showBlePicker = true
+            }
+            .buttonStyle(.bordered)
+
+            if let selectedBlePeripheral = viewModel.selectedBlePeripheral {
+                Text(selectedBlePeripheral.id.uuidString)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Picker("Security", selection: $viewModel.bleSecurityMode) {
+                ForEach(BleSecurityMode.allCases) { mode in
+                    Text(mode.displayName)
+                        .tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+
+            if viewModel.bleSecurityMode == .passkey {
+                TextField("Passkey", text: $viewModel.blePasskey)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
+                Text("If iOS asks to pair, enter this passkey in the system prompt.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if viewModel.bleSecurityMode == .none {
+                Text("No passkey will be shown in the app. iOS will still handle any pairing requirements exposed by the peripheral.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .sheet(isPresented: $showBlePicker) {
+            BlePeripheralPickerView(discoveryService: viewModel.bleDiscoveryService) { peripheral in
+                viewModel.selectedBlePeripheral = peripheral
+            }
+        }
+    }
+}
+
 // MARK: - Step 2: Adding, Loading indicator
 
 struct DeviceAddStep2LoadingView: View {
+    let connectionType: DeviceConnectionType
     let address: String
+    let bleName: String?
+    let bleSecurityMode: BleSecurityMode
+    let blePasskey: String
 
     var body: some View {
-        ProgressView()
-            .controlSize(ControlSize.large)
-            .padding()
-        Text("Adding \(address)")
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(ControlSize.large)
+                .padding()
+            if connectionType == .wifi {
+                Text("Adding \(address)")
+            } else {
+                Text("Connecting to \(bleName ?? "BLE Device")")
+                if bleSecurityMode == .passkey {
+                    Text("If iOS shows a pairing prompt, enter passkey \(blePasskey).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }
 
