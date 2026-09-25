@@ -7,8 +7,6 @@ enum BleBridgeConstants {
     static let rxUUID = CBUUID(string: "7C2E0002-5D2B-4FD0-B1C2-0CC8F5470101")
     static let txUUID = CBUUID(string: "7C2E0003-5D2B-4FD0-B1C2-0CC8F5470101")
     static let liveUUID = CBUUID(string: "7C2E0004-5D2B-4FD0-B1C2-0CC8F5470101")
-    static let defaultChunkSize = 180
-    static let requestTimeout: TimeInterval = 10
 }
 
 struct BleBridgeResponse {
@@ -22,13 +20,16 @@ struct BleDiscoveredPeripheral: Identifiable, Hashable {
     let name: String
     let rssi: Int
 
-    init(peripheral: CBPeripheral, rssi: NSNumber) {
-        self.id = peripheral.identifier
-        self.name = peripheral.name ?? "WLED BLE"
-        self.rssi = rssi.intValue
+    init(id: UUID, name: String, rssi: Int) {
+        self.id = id
+        self.name = name
+        self.rssi = rssi
     }
 
-    var subtitle: String {
-        "\(name) • RSSI \(rssi)"
+    var signalDescription: String {
+        if rssi == 127 { return "Signal unavailable" }
+        if rssi >= -60 { return "Strong signal" }
+        if rssi >= -80 { return "Good signal" }
+        return "Weak signal · move closer"
     }
 }

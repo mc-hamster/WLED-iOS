@@ -14,12 +14,7 @@
     </entity>
     <entity name="Device" representedClassName="Device" syncable="YES" codeGenerationType="class">
         <attribute name="address" attributeType="String"/>
-        <attribute name="bleIdentifier" optional="YES" attributeType="String"/>
-        <attribute name="bleName" optional="YES" attributeType="String"/>
-        <attribute name="blePasskey" optional="YES" attributeType="String"/>
-        <attribute name="bleSecurityMode" optional="YES" attributeType="String"/>
         <attribute name="branch" optional="YES" attributeType="String"/>
-        <attribute name="connectionType" optional="YES" attributeType="String"/>
         <attribute name="customName" optional="YES" attributeType="String"/>
         <attribute name="isHidden" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
         <attribute name="lastSeen" optional="YES" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>

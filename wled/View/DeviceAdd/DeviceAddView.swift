@@ -1,57 +1,58 @@
-
 import SwiftUI
 
 struct DeviceAddView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) var dismiss
 
-    @ObservedObject private var viewModel = DeviceAddViewModel()
+    @StateObject private var viewModel = DeviceAddViewModel()
 
     var body: some View {
-        NavigationView {
-            VStack {
-                switch viewModel.currentStep {
-                case .form(let errorMessage):
-                    DeviceAddStep1FormView(
-                        viewModel: viewModel,
-                        errorMessage: errorMessage
-                    )
-                case .adding:
-                    DeviceAddStep2LoadingView(
-                        connectionType: viewModel.connectionType,
-                        address: viewModel.address,
-                        bleName: viewModel.selectedBlePeripheral?.name,
-                        bleSecurityMode: viewModel.bleSecurityMode,
-                        blePasskey: viewModel.blePasskey
-                    )
-                case .success(let device):
-                    DeviceAddStep3Success(device: device)
-                }
-                Spacer()
-            }
-            .padding()
-            .animation(.easeInOut, value: viewModel.currentStep)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", systemImage: "xmark") {
-                        dismiss()
+        NavigationStack {
+            ScrollView {
+                VStack {
+                    switch viewModel.currentStep {
+                    case .form(let errorMessage):
+                        DeviceAddStep1FormView(
+                            viewModel: viewModel,
+                            errorMessage: errorMessage
+                        )
+                    case .adding:
+                        DeviceAddStep2LoadingView(
+                            connectionType: viewModel.connectionType,
+                            address: viewModel.address,
+                            bleName: viewModel.selectedBlePeripheral?.name
+                        )
+                    case .success(let device):
+                        DeviceAddStep3Success(device: device)
                     }
+                    Spacer()
                 }
-                if (viewModel.currentStep.isForm) {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("Add", systemImage: "checkmark") {
-                            withAnimation {
-                                viewModel.submitCreateDevice()
-                            }
+                .padding()
+                .animation(.easeInOut, value: viewModel.currentStep)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(viewModel.currentStep.isSuccess ? "Done" : "Cancel") {
+                            viewModel.cancel()
+                            dismiss()
                         }
-                        .disabled(!viewModel.canSubmit)
+                    }
+                    if viewModel.currentStep.isForm {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button("Add", systemImage: "checkmark") {
+                                withAnimation {
+                                    viewModel.submitCreateDevice()
+                                }
+                            }
+                            .disabled(!viewModel.canSubmit)
+                        }
                     }
                 }
             }
             .navigationTitle("New Device")
             .navigationBarTitleDisplayMode(.inline)
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
+        .onDisappear { viewModel.cancel() }
     }
 }
 
@@ -125,32 +126,12 @@ struct DeviceAddBleForm: View {
             }
             .buttonStyle(.bordered)
 
-            if let selectedBlePeripheral = viewModel.selectedBlePeripheral {
-                Text(selectedBlePeripheral.id.uuidString)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Label("Pair securely with iOS", systemImage: "lock.shield")
+                .font(.subheadline)
+            Text("Find your six-digit pairing code in WLED Settings → Usermods → BleApiBridge. Enter it only when iOS asks. Your iPhone remembers this device for next time.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-            Picker("Security", selection: $viewModel.bleSecurityMode) {
-                ForEach(BleSecurityMode.allCases) { mode in
-                    Text(mode.displayName)
-                        .tag(mode)
-                }
-            }
-            .pickerStyle(.menu)
-
-            if viewModel.bleSecurityMode == .passkey {
-                TextField("Passkey", text: $viewModel.blePasskey)
-                    .keyboardType(.numberPad)
-                    .textFieldStyle(.roundedBorder)
-                Text("If iOS asks to pair, enter this passkey in the system prompt.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if viewModel.bleSecurityMode == .none {
-                Text("No passkey will be shown in the app. iOS will still handle any pairing requirements exposed by the peripheral.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
         .sheet(isPresented: $showBlePicker) {
             BlePeripheralPickerView(discoveryService: viewModel.bleDiscoveryService) { peripheral in
@@ -166,8 +147,6 @@ struct DeviceAddStep2LoadingView: View {
     let connectionType: DeviceConnectionType
     let address: String
     let bleName: String?
-    let bleSecurityMode: BleSecurityMode
-    let blePasskey: String
 
     var body: some View {
         VStack(spacing: 12) {
@@ -178,11 +157,9 @@ struct DeviceAddStep2LoadingView: View {
                 Text("Adding \(address)")
             } else {
                 Text("Connecting to \(bleName ?? "BLE Device")")
-                if bleSecurityMode == .passkey {
-                    Text("If iOS shows a pairing prompt, enter passkey \(blePasskey).")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Keep WLED nearby. Accept the iOS pairing prompt and enter the device’s six-digit code if asked.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }

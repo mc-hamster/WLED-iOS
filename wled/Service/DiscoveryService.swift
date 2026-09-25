@@ -1,4 +1,3 @@
-
 import Foundation
 import Combine
 import CoreData
@@ -7,10 +6,14 @@ import SwiftUI
 
 // TODO: Check if this needs a start/stop like on Android
 @MainActor
-class DiscoveryService: NSObject, Identifiable {
+class DiscoveryService: NSObject, ObservableObject, Identifiable {
 
     let onDeviceDiscovered: (_ address: String, _ macAddress: String?) -> Void
     var browser: NWBrowser!
+
+    /// Tracks whether the local network permission has been granted.
+    /// `nil` = unknown (checking), `true` = granted, `false` = denied.
+    @Published var isLocalNetworkGranted: Bool?
 
     init(onDeviceDiscovered: @escaping (_: String, _: String?) -> Void) {
         self.onDeviceDiscovered = onDeviceDiscovered
@@ -49,6 +52,17 @@ class DiscoveryService: NSObject, Identifiable {
             self.browser.cancel()
         case .ready:
             print("NW Browser: new bonjour discovery - ready")
+            if isLocalNetworkGranted != true {
+                isLocalNetworkGranted = true
+            }
+        case .waiting(let error):
+            print("NW Browser: waiting with error: \(error)")
+            // DNS error -65570 is kDNSServiceErr_PolicyDenied, which means
+            // the user has denied Local Network permission for this app.
+            if case .dns(let dnsError) = error, dnsError == -65570 {
+                print("NW Browser: Local network permission denied")
+                isLocalNetworkGranted = false
+            }
         case .setup:
             print("NW Browser: in SETUP state")
         default:
@@ -71,9 +85,11 @@ class DiscoveryService: NSObject, Identifiable {
     }
 
     private func resolveService(for result: NWBrowser.Result) {
-        var macAddress: String?
+        let macAddress: String?
         if case .bonjour(let txtRecord) = result.metadata {
             macAddress = txtRecord["mac"]
+        } else {
+            macAddress = nil
         }
         print("NW Browser: Added, mac: \(macAddress?.description ?? "nil")")
 
@@ -81,7 +97,7 @@ class DiscoveryService: NSObject, Identifiable {
             print("Connecting to \(name), MAC: \(macAddress?.description ?? "nil")")
             let connection = NWConnection(to: result.endpoint, using: .tcp)
             connection.stateUpdateHandler = { [weak self] state in
-                Task { @MainActor in
+                Task { @MainActor [weak self, macAddress] in
                     self?.handleConnectionState(state, connection: connection, name: name, macAddress: macAddress)
                 }
             }

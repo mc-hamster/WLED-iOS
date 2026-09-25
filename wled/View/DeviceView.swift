@@ -1,9 +1,10 @@
-
 import SwiftUI
 
 struct DeviceView: View {
     @Environment(\.colorScheme) var colorScheme
     @ObservedObject var device: DeviceWithState
+    var onSendState: (WledState) -> Void = { _ in }
+    var onReconnect: () -> Void = {}
 
     @State var showDownloadFinished = false
     @State var shouldWebViewRefresh = false
@@ -13,11 +14,11 @@ struct DeviceView: View {
     var body: some View {
         Group {
             if device.device.preferredConnectionType == .ble {
-                BleDeviceDetailView(device: device)
+                BleDeviceDetailView(device: device, onSendState: onSendState, onReconnect: onReconnect)
                     .toolbar { toolbar }
             } else {
                 ZStack {
-                    WebView(url: getDeviceAddress(), reload: $shouldWebViewRefresh) { filePathDestination in
+                    WebView(url: getDeviceAddress(), reload: $shouldWebViewRefresh) { _ in
                         withAnimation {
                             showDownloadFinished = true
                         }
@@ -28,7 +29,7 @@ struct DeviceView: View {
                             }
                         }
                     }
-                    if (showDownloadFinished) {
+                    if showDownloadFinished {
                         VStack {
                             Spacer()
                             Text("Download Completed")

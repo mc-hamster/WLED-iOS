@@ -4,6 +4,8 @@
 An app for iPhone and iPad for discovering and controlling your WLED devices easily!  
 This aims to replace the previous WLED app [found here](https://github.com/Aircoookie/WLED-App).
 
+This fork’s `ble` branch adds secure Bluetooth discovery, pairing, and native LED controls. See [Bluetooth setup, supported features, and verification](docs/BLUETOOTH.md).
+
 ### Features
 - Automatic device detection (mDNS)
 - All lights are accessible from one list

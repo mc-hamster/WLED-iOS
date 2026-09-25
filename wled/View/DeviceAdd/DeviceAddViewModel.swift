@@ -13,11 +13,10 @@ final class DeviceAddViewModel: ObservableObject {
 
     @Published var connectionType: DeviceConnectionType = .wifi
     @Published var address: String = ""
-    @Published var bleSecurityMode: BleSecurityMode = .passkey
-    @Published var blePasskey: String = "123456"
     @Published var selectedBlePeripheral: BleDiscoveredPeripheral?
     @Published var currentStep: Step = .form()
 
+    private var addTask: Task<Void, Never>?
     private let firstContactService = DeviceFirstContactService()
     let bleDiscoveryService = BleDiscoveryService()
 
@@ -54,6 +53,7 @@ final class DeviceAddViewModel: ObservableObject {
     }
 
     func submitCreateDevice() {
+        guard currentStep.isForm, addTask == nil else { return }
         switch connectionType {
         case .wifi:
             if !isAddressValid {
@@ -67,14 +67,21 @@ final class DeviceAddViewModel: ObservableObject {
             }
         }
 
-        Task {
+        currentStep = .adding
+        addTask = Task {
             await findDevice()
+            addTask = nil
         }
+    }
+
+    func cancel() {
+        addTask?.cancel()
+        addTask = nil
+        bleDiscoveryService.stopScan()
     }
 
     /// Starts searching for the device and adds it, if one is found
     private func findDevice() async {
-        currentStep = .adding
         do {
             let newDeviceId: NSManagedObjectID
             switch connectionType {
@@ -87,19 +94,19 @@ final class DeviceAddViewModel: ObservableObject {
                 }
                 newDeviceId = try await firstContactService.fetchAndUpsertBleDevice(
                     peripheralID: selectedBlePeripheral.id,
-                    bleName: selectedBlePeripheral.name,
-                    securityMode: bleSecurityMode,
-                    passkey: bleSecurityMode == .passkey ? blePasskey.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+                    bleName: selectedBlePeripheral.name
                 )
             }
 
+            try Task.checkCancellation()
             let viewContext = PersistenceController.shared.container.viewContext
             if let newDevice = viewContext.object(with: newDeviceId) as? Device {
                 currentStep = .success(device: newDevice)
             }
-        } catch (let error) {
-            print("Error: \(error)")
-            currentStep = .form(errorMessage: Error.cantConnect)
+        } catch is CancellationError {
+            return
+        } catch {
+            currentStep = .form(errorMessage: error.localizedDescription)
         }
     }
 
@@ -111,6 +118,11 @@ final class DeviceAddViewModel: ObservableObject {
 
         var isForm: Bool {
             if case .form = self { return true }
+            return false
+        }
+
+        var isSuccess: Bool {
+            if case .success = self { return true }
             return false
         }
     }

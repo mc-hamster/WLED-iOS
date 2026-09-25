@@ -8,15 +8,16 @@ final class BleDiscoveryService: NSObject, ObservableObject {
     @Published private(set) var bluetoothState: CBManagerState = .unknown
 
     private lazy var centralManager = CBCentralManager(delegate: self, queue: nil)
+    private var scanRequested = false
     private var peripheralMap: [UUID: BleDiscoveredPeripheral] = [:]
 
     override init() {
         super.init()
-        _ = centralManager
     }
 
     func startScan() {
-        guard bluetoothState == .poweredOn else { return }
+        scanRequested = true
+        guard centralManager.state == .poweredOn else { return }
         peripheralMap.removeAll()
         peripherals = []
         isScanning = true
@@ -27,7 +28,8 @@ final class BleDiscoveryService: NSObject, ObservableObject {
     }
 
     func stopScan() {
-        centralManager.stopScan()
+        scanRequested = false
+        if isScanning { centralManager.stopScan() }
         isScanning = false
     }
 }
@@ -36,15 +38,25 @@ extension BleDiscoveryService: CBCentralManagerDelegate {
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         MainActor.assumeIsolated {
             self.bluetoothState = central.state
-            if central.state != .poweredOn {
-                self.stopScan()
+            if central.state == .poweredOn && self.scanRequested {
+                self.startScan()
+            } else if central.state != .poweredOn {
+                self.isScanning = false
+                self.peripheralMap.removeAll()
+                self.peripherals = []
             }
         }
     }
 
     nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
+        let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
         MainActor.assumeIsolated {
-            let discovered = BleDiscoveredPeripheral(peripheral: peripheral, rssi: RSSI)
+            guard self.scanRequested, self.isScanning else { return }
+            let discovered = BleDiscoveredPeripheral(
+                id: peripheral.identifier,
+                name: advertisedName ?? peripheral.name ?? "WLED",
+                rssi: RSSI.intValue
+            )
             self.peripheralMap[discovered.id] = discovered
             self.peripherals = self.peripheralMap.values.sorted {
                 if $0.name == $1.name {

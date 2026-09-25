@@ -28,6 +28,7 @@
 /* Begin PBXFileReference section */
 		882CC9132F05CFE00080567C /* WLEDTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WLEDTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		884FA90A2F027B6100097D56 /* v2.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = v2.xcdatamodel; sourceTree = "<group>"; };
+		BBE300002F027B6100097D56 /* v3.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = v3.xcdatamodel; sourceTree = "<group>"; };
 		884FA90B2F027B6100097D56 /* wled_native_data.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = wled_native_data.xcdatamodel; sourceTree = "<group>"; };
 		C9A9E5BD2918D1C3005B5C22 /* WLED.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WLED.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C9C4B47E2AC0050500791D20 /* README.md */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = SOURCE_ROOT; };
@@ -45,7 +46,7 @@
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		8813CE002EE9178D00B0A987 /* wled */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (8813CE392EE9178D00B0A987 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = wled; sourceTree = "<group>"; };
-		882CC9142F05CFE00080567C /* WLEDTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = WLEDTests; sourceTree = "<group>"; };
+		882CC9142F05CFE00080567C /* wledTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = wledTests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -84,7 +85,7 @@
 				884FA9472F02811C00097D56 /* Data */,
 				C9C4B47E2AC0050500791D20 /* README.md */,
 				8813CE002EE9178D00B0A987 /* wled */,
-				882CC9142F05CFE00080567C /* WLEDTests */,
+				882CC9142F05CFE00080567C /* wledTests */,
 				C9A9E5BE2918D1C3005B5C22 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -115,7 +116,7 @@
 				882CC9182F05CFE00080567C /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				882CC9142F05CFE00080567C /* WLEDTests */,
+				882CC9142F05CFE00080567C /* wledTests */,
 			);
 			name = WLEDTests;
 			packageProductDependencies = (
@@ -135,6 +136,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				8849FA232F710B1B008ACEC3 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				8813CE002EE9178D00B0A987 /* wled */,
@@ -182,6 +184,7 @@
 			packageReferences = (
 				C948F4962B3D2B320092C4B1 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 				C946FB842B68C53600D5B00D /* XCRemoteSwiftPackageReference "swift-collections" */,
+				8849F9052F710909008ACEC3 /* XCRemoteSwiftPackageReference "SwiftLintPlugins" */,
 			);
 			productRefGroup = C9A9E5BE2918D1C3005B5C22 /* Products */;
 			projectDirPath = "";
@@ -234,6 +237,10 @@
 			isa = PBXTargetDependency;
 			target = C9A9E5BC2918D1C3005B5C22 /* WLED */;
 			targetProxy = 882CC9172F05CFE00080567C /* PBXContainerItemProxy */;
+		};
+		8849FA232F710B1B008ACEC3 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			productRef = 8849FA222F710B1B008ACEC3 /* SwiftLintBuildToolPlugin */;
 		};
 /* End PBXTargetDependency section */
 
@@ -436,6 +443,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MARKETING_VERSION = 7.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "ca.cgagnier.wled-native";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -466,6 +474,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MARKETING_VERSION = 7.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "ca.cgagnier.wled-native";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -508,12 +517,20 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		8849F9052F710909008ACEC3 /* XCRemoteSwiftPackageReference "SwiftLintPlugins" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/SimplyDanny/SwiftLintPlugins";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.65.1;
+			};
+		};
 		C946FB842B68C53600D5B00D /* XCRemoteSwiftPackageReference "swift-collections" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/apple/swift-collections.git";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.6;
+				minimumVersion = 1.7.0;
 			};
 		};
 		C948F4962B3D2B320092C4B1 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
@@ -521,12 +538,17 @@
 			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 2.2.0;
+				minimumVersion = 2.4.1;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		8849FA222F710B1B008ACEC3 /* SwiftLintBuildToolPlugin */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8849F9052F710909008ACEC3 /* XCRemoteSwiftPackageReference "SwiftLintPlugins" */;
+			productName = "plugin:SwiftLintBuildToolPlugin";
+		};
 		C946FB852B68C53600D5B00D /* Collections */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C946FB842B68C53600D5B00D /* XCRemoteSwiftPackageReference "swift-collections" */;
@@ -553,10 +575,11 @@
 		884FA9082F027B6100097D56 /* wled_native_data.xcdatamodeld */ = {
 			isa = XCVersionGroup;
 			children = (
+				BBE300002F027B6100097D56 /* v3.xcdatamodel */,
 				884FA90A2F027B6100097D56 /* v2.xcdatamodel */,
 				884FA90B2F027B6100097D56 /* wled_native_data.xcdatamodel */,
 			);
-			currentVersion = 884FA90A2F027B6100097D56 /* v2.xcdatamodel */;
+			currentVersion = BBE300002F027B6100097D56 /* v3.xcdatamodel */;
 			path = wled_native_data.xcdatamodeld;
 			sourceTree = "<group>";
 			versionGroupType = wrapper.xcdatamodel;

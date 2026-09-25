@@ -26,9 +26,9 @@ actor DeviceFirstContactService {
         var errorDescription: String? {
             switch self {
             case .invalidURL:
-                return String(localized:"The device address is invalid.", comment: "Invalid URL error")
+                return String(localized: "The device address is invalid.", comment: "Invalid URL error")
             case .missingMacAddress:
-                return String(localized:"The device did not report a valid MAC address.", comment: "Missing MAC error")
+                return String(localized: "The device did not report a valid MAC address.", comment: "Missing MAC error")
             case .networkError(let error):
                 return String(localized: "Network error: \(error.localizedDescription)")
             case .invalidBleResponse:
@@ -69,28 +69,20 @@ actor DeviceFirstContactService {
 
     func fetchAndUpsertBleDevice(
         peripheralID: UUID,
-        bleName: String?,
-        securityMode: BleSecurityMode,
-        passkey: String?
+        bleName: String?
     ) async throws -> NSManagedObjectID {
-        let info = try await fetchBleDeviceInfo(
-            peripheralID: peripheralID,
-            bleName: bleName,
-            securityMode: securityMode,
-            passkey: passkey
-        )
+        let info = try await fetchBleDeviceInfo(peripheralID: peripheralID)
 
         guard let macAddress = info.mac, !macAddress.isEmpty else {
             throw ServiceError.missingMacAddress
         }
 
+        try Task.checkCancellation()
         return try await upsertBleDevice(
             macAddress: macAddress,
             peripheralID: peripheralID,
             bleName: bleName ?? info.name,
-            name: info.name,
-            securityMode: securityMode,
-            passkey: passkey
+            name: info.name
         )
     }
 
@@ -173,18 +165,8 @@ actor DeviceFirstContactService {
 
     /// Handles the Core Data logic to find, update, or create the device.
     @MainActor
-    private func fetchBleDeviceInfo(
-        peripheralID: UUID,
-        bleName: String?,
-        securityMode: BleSecurityMode,
-        passkey: String?
-    ) async throws -> Info {
-        let session = BleBridgeSession(
-            peripheralID: peripheralID,
-            expectedName: bleName,
-            securityMode: securityMode,
-            passkey: passkey
-        )
+    func fetchBleDeviceInfo(peripheralID: UUID) async throws -> Info {
+        let session = BleBridgeSession(peripheralID: peripheralID)
 
         defer {
             session.disconnect()
@@ -249,9 +231,7 @@ actor DeviceFirstContactService {
         macAddress: String,
         peripheralID: UUID,
         bleName: String?,
-        name: String?,
-        securityMode: BleSecurityMode,
-        passkey: String?
+        name: String?
     ) async throws -> NSManagedObjectID {
         let logger = self.logger
         return try await persistenceController.container.performBackgroundTask { context in
@@ -267,27 +247,27 @@ actor DeviceFirstContactService {
             if let existingDevice = try? context.fetch(request).first {
                 logger.debug("Updating BLE settings for existing device: \(macAddress)")
                 if existingDevice.address == nil || existingDevice.address?.isEmpty == true {
-                    existingDevice.address = identifierString
+                    existingDevice.address = ""
                 }
                 existingDevice.originalName = name
                 existingDevice.connectionType = DeviceConnectionType.ble.rawValue
                 existingDevice.bleIdentifier = identifierString
                 existingDevice.bleName = bleName
-                existingDevice.bleSecurityMode = securityMode.rawValue
-                existingDevice.blePasskey = passkey
+                existingDevice.bleSecurityMode = nil
+                existingDevice.blePasskey = nil
                 device = existingDevice
             } else {
                 logger.info("Creating new BLE device: \(macAddress)")
                 device = Device(context: context)
                 device.macAddress = macAddress
-                device.address = identifierString
+                device.address = ""
                 device.originalName = name
                 device.isHidden = false
                 device.connectionType = DeviceConnectionType.ble.rawValue
                 device.bleIdentifier = identifierString
                 device.bleName = bleName
-                device.bleSecurityMode = securityMode.rawValue
-                device.blePasskey = passkey
+                device.bleSecurityMode = nil
+                device.blePasskey = nil
             }
 
             if context.hasChanges {

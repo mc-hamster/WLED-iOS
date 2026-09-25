@@ -29,7 +29,33 @@ enum UpdateError: LocalizedError {
 
 /// Service responsible for identifying, downloading, and installing firmware updates for WLED devices.
 @MainActor
-class DeviceUpdateService : ObservableObject {
+class DeviceUpdateService: ObservableObject {
+
+    // MARK: - Constants
+
+    /**
+     * Maps deprecated or transitional release names to the release name that should be used
+     * for OTA updates. This handles cases where the binary name changes between WLED releases.
+     *
+     * For example, devices running the ESP32_V4 tech-preview (WLED 0.15.x) must be updated
+     * with the standard ESP32 binary when upgrading to 0.16.0 or later, as ESP32_V4 assets will
+     * no longer be published in those releases. Within 0.15.x, ESP32_V4 assets still exist
+     * and no remapping is needed.
+     *
+     * These overrides are only applied when the target version is [RELEASE_OVERRIDES_MIN_VERSION]
+     * or greater.
+     *
+     * See: https://github.com/Moustachauve/WLED-Android/issues/129
+     */
+    static let releaseNameOverrides: [String: String] = [
+        "ESP32_V4": "ESP32"
+    ]
+    
+    /**
+     * The minimum target version from which [releaseNameOverrides] are applied.
+     * Overrides only take effect when upgrading to this version or later.
+     */
+    static let releaseOverridesMinVersion = "0.16.0"
 
     // MARK: - Properties
 
@@ -38,7 +64,7 @@ class DeviceUpdateService : ObservableObject {
         "esp01",
         "esp02",
         "esp32",
-        "esp8266",
+        "esp8266"
     ]
 
     let device: DeviceWithState
@@ -47,7 +73,7 @@ class DeviceUpdateService : ObservableObject {
 
     private var assetName: String = ""
     private(set) var couldDetermineAsset = false
-    private var asset: Asset? = nil
+    private var asset: Asset?
 
     // MARK: - Initialization
 
@@ -98,13 +124,35 @@ class DeviceUpdateService : ObservableObject {
             return false
         }
 
-        let combined = "\(tagName)_\(release)"
+        let targetRelease = DeviceUpdateService.determineAsset(byRelease: release, targetVersion: tagName)
+
+        let combined = "\(tagName)_\(targetRelease)"
         let versionWithRelease = combined.lowercased().hasPrefix("v")
         ? String(combined.dropFirst())
         : combined
 
         self.assetName = "WLED_\(versionWithRelease).bin"
         return findAsset(assetName: assetName)
+    }
+
+    /// Determines the correct asset name by applying min version checks and overrides.
+    static func determineAsset(byRelease releaseName: String, targetVersion: String) -> String {
+        guard let parsedTargetVersion = SemanticVersion(targetVersion) else {
+            print("Warning: Failed to parse semantic version from \(targetVersion). Falling back to raw release name.")
+            return releaseName
+        }
+        
+        guard let minOverridesVersion = SemanticVersion(releaseOverridesMinVersion) else {
+            return releaseName
+        }
+        
+        if parsedTargetVersion.isAtLeast(minOverridesVersion, ignorePreRelease: true) {
+            if let override = releaseNameOverrides[releaseName.uppercased()] {
+                return override
+            }
+        }
+        
+        return releaseName
     }
 
     /// Determines the asset to download based on the device platform (e.g., esp32).
@@ -171,7 +219,7 @@ class DeviceUpdateService : ObservableObject {
             return false
         }
 
-        return await getGithubApi().downloadReleaseBinary(asset: asset, targetFile: localUrl)
+        return await getGithubApi().downloadReleaseBinary(assetId: asset.assetId, assetName: asset.name, targetFile: localUrl)
     }
 
     // MARK: - File System Helpers
@@ -189,7 +237,7 @@ class DeviceUpdateService : ObservableObject {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             return directory.appendingPathExtension(asset?.name ?? "unknown")
-        } catch (let writeError) {
+        } catch let writeError {
             print("error creating directory \(directory) : \(writeError)")
             return nil
         }
@@ -230,7 +278,7 @@ class DeviceUpdateService : ObservableObject {
                 throw UpdateError.uploadFailed(httpResponse.statusCode)
             }
 
-            print("Update Success: \(String(decoding: data, as: UTF8.self))")
+            print("Update Success: \(String(data: data, encoding: .utf8) ?? "")")
         } catch {
             throw UpdateError.networkError(error)
         }

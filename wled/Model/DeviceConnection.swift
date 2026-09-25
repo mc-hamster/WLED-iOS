@@ -16,25 +16,6 @@ enum DeviceConnectionType: String, CaseIterable, Identifiable {
     }
 }
 
-enum BleSecurityMode: String, CaseIterable, Identifiable {
-    case systemDefault = "systemDefault"
-    case passkey = "passkey"
-    case none = "none"
-
-    var id: Self { self }
-
-    var displayName: String {
-        switch self {
-        case .systemDefault:
-            return "System Default"
-        case .passkey:
-            return "Passkey"
-        case .none:
-            return "No Passkey"
-        }
-    }
-}
-
 extension Device {
     var connectionTypeValue: DeviceConnectionType {
         get {
@@ -45,18 +26,6 @@ extension Device {
         }
         set {
             connectionType = newValue.rawValue
-        }
-    }
-
-    var bleSecurityModeValue: BleSecurityMode {
-        get {
-            guard let rawValue = bleSecurityMode else {
-                return .systemDefault
-            }
-            return BleSecurityMode(rawValue: rawValue) ?? .systemDefault
-        }
-        set {
-            bleSecurityMode = newValue.rawValue
         }
     }
 
@@ -71,10 +40,10 @@ extension Device {
         switch connectionTypeValue {
         case .ble where bleIdentifierUUID != nil:
             return .ble
-        case .wifi where !(address ?? "").isEmpty:
+        case .wifi where !wifiAddress.isEmpty:
             return .wifi
         case .ble:
-            return !(address ?? "").isEmpty ? .wifi : .ble
+            return !wifiAddress.isEmpty ? .wifi : .ble
         case .wifi:
             return bleIdentifierUUID != nil ? .ble : .wifi
         }
@@ -85,7 +54,10 @@ extension Device {
     }
 
     var wifiAddress: String {
-        get { address ?? "" }
+        get {
+            guard let address, UUID(uuidString: address) == nil else { return "" }
+            return address
+        }
         set { address = newValue }
     }
 }

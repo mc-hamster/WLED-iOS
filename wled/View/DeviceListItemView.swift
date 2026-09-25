@@ -1,6 +1,4 @@
-
 import SwiftUI
-
 
 struct DeviceListItemView: View {
     @Environment(\.managedObjectContext) private var viewContext
@@ -28,6 +26,11 @@ struct DeviceListItemView: View {
                 Toggle("Turn On/Off", isOn: isOnBinding)
                     .labelsHidden()
                     .frame(alignment: .trailing)
+                    // On iOS 16, tapping the Toggle also triggers the parent row's .onTapGesture.
+                    // This empty handler "consumes" the SwiftUI tap at the child level,
+                    // while the underlying UISwitch still receives the UIKit event.
+                    // This can be removed once the minimum deployment target is iOS 17+.
+                    .onTapGesture { }
             }
 
             Slider(
@@ -44,10 +47,10 @@ struct DeviceListItemView: View {
         .applyDeviceSelectionStyle(isSelected: isSelected, color: fixedDeviceColor)
         .animation(.linear(duration: 0.3), value: fixedDeviceColor)
         .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
-        .onAppear() {
+        .onAppear {
             brightness = Double(device.stateInfo?.state.brightness ?? 0)
         }
-        .onChange(of: device.stateInfo?.state.brightness) { brightness in
+        .onChange(of: device.stateInfo?.state.brightness) { _ in
             withAnimation(.spring()) {
                 self.brightness = Double(device.stateInfo?.state.brightness ?? 0)
             }

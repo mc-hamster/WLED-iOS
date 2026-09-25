@@ -15,7 +15,6 @@ struct DeviceEditView: View {
         self.device = device
     }
 
-
     // MARK: - body
 
     var body: some View {
@@ -39,6 +38,7 @@ struct DeviceEditView: View {
                         ForEach(DeviceConnectionType.allCases) { connectionType in
                             Text(connectionType.displayName)
                                 .tag(connectionType)
+                                .disabled(connectionType == .ble ? viewModel.bleIdentifier.isEmpty : viewModel.wifiAddress.isEmpty)
                         }
                     }
                     .pickerStyle(.segmented)
@@ -56,28 +56,11 @@ struct DeviceEditView: View {
                     }
                     .buttonStyle(.bordered)
 
-                    if !viewModel.bleIdentifier.isEmpty {
-                        Text(viewModel.bleIdentifier)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text("Pairing is managed by iOS. Find the pairing code in WLED Settings → Usermods → BleApiBridge.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if viewModel.isVerifyingBluetooth { ProgressView("Checking device…") }
+                    if let error = viewModel.bleConnectionError { Text(error).font(.caption).foregroundStyle(.red) }
 
-                    Picker("BLE Security", selection: $viewModel.bleSecurityMode) {
-                        ForEach(BleSecurityMode.allCases) { mode in
-                            Text(mode.displayName)
-                                .tag(mode)
-                        }
-                    }
-                    .pickerStyle(.menu)
-
-                    if viewModel.bleSecurityMode == .passkey {
-                        TextField("BLE Passkey", text: $viewModel.blePasskey)
-                            .keyboardType(.numberPad)
-                            .textFieldStyle(.roundedBorder)
-                        Text("If iOS shows a Bluetooth pairing prompt, enter this passkey in the system dialog.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 }
 
                 Toggle("Hide this Device", isOn: $viewModel.hideDevice)
@@ -99,9 +82,9 @@ struct DeviceEditView: View {
                 }
                 .padding(.bottom)
 
-                if device.stateInfo != nil && device.device.preferredConnectionType == .wifi {
+                if device.stateInfo != nil && device.device.preferredConnectionType == .wifi && device.stateInfo?.info.ble == nil {
                     Card {
-                        if ((device.availableUpdateVersion ?? "").isEmpty) {
+                        if (device.availableUpdateVersion ?? "").isEmpty {
                             DeviceNoUpdateAvailable(
                                 device: device,
                                 isCheckingForUpdates: viewModel.isCheckingForUpdates
@@ -127,6 +110,7 @@ struct DeviceEditView: View {
         }
         .navigationTitle("Edit Device")
         .navigationBarTitleDisplayMode(.large)
+        .onDisappear { viewModel.cancelBluetoothVerification() }
         .sheet(isPresented: $showBlePicker) {
             BlePeripheralPickerView(discoveryService: bleDiscoveryService) { peripheral in
                 viewModel.updateSelectedBlePeripheral(peripheral)
@@ -149,13 +133,16 @@ struct DeviceNoUpdateAvailable: View {
             "Version \(device.stateInfo?.info.version ?? String(localized: "unknown_version"))"
         )
         HStack {
-            Button(action: {
-                Task {
-                    await onCheckForUpdate()
+            Button(
+                action: {
+                    Task {
+                        await onCheckForUpdate()
+                    }
+                },
+                label: {
+                    Text(isCheckingForUpdates ? "Checking for Updates" : "Check for Update")
                 }
-            }) {
-                Text(isCheckingForUpdates ? "Checking for Updates" : "Check for Update")
-            }
+            )
             .buttonStyle(.bordered)
             .padding(.trailing)
             .disabled(isCheckingForUpdates)

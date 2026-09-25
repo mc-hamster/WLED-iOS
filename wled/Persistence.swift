@@ -13,9 +13,12 @@ struct PersistenceController {
     init(inMemory: Bool = false) {
         container = NSPersistentContainer(name: "wled_native_data")
         if inMemory {
-            container.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
+            container.persistentStoreDescriptions.first?.url = URL(fileURLWithPath: "/dev/null")
         }
-        container.loadPersistentStores(completionHandler: { (storeDescription, error) in
+        let description = container.persistentStoreDescriptions.first
+        description?.shouldMigrateStoreAutomatically = true
+        description?.shouldInferMappingModelAutomatically = true
+        container.loadPersistentStores(completionHandler: { (_, error) in
             if let error = error as NSError? {
                 // MARK: - Enhanced Error Logging
 
@@ -64,9 +67,20 @@ struct PersistenceController {
         })
         container.viewContext.automaticallyMergesChangesFromParent = true
         container.viewContext.mergePolicy = NSMergePolicy.mergeByPropertyObjectTrump
-        let description = container.persistentStoreDescriptions.first
-        description?.shouldMigrateStoreAutomatically = true
-        description?.shouldInferMappingModelAutomatically = true
+        container.performBackgroundTask { context in
+            do { try Self.clearLegacyBluetoothSecrets(in: context) }
+            catch { print("Could not clear obsolete Bluetooth pairing fields: \(error.localizedDescription)") }
+        }
+    }
+
+    /// Older BLE builds stored a code that Core Bluetooth never used. Only iOS should retain pairing secrets.
+    nonisolated static func clearLegacyBluetoothSecrets(in context: NSManagedObjectContext) throws {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "Device")
+        request.predicate = NSPredicate(format: "blePasskey != nil OR bleSecurityMode != nil")
+        for device in try context.fetch(request) {
+            device.setValue(nil, forKey: "blePasskey")
+            device.setValue(nil, forKey: "bleSecurityMode")
+        }
+        if context.hasChanges { try context.save() }
     }
 }
-
