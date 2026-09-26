@@ -14,6 +14,7 @@ class DeviceEditViewModel: ObservableObject {
     private let context: NSManagedObjectContext
 
     private var cancellables = Set<AnyCancellable>()
+    private var deviceObservation: AnyCancellable?
     private var verificationTask: Task<Void, Never>?
 
     @Published var device: DeviceWithState
@@ -46,6 +47,7 @@ class DeviceEditViewModel: ObservableObject {
         setupCustomNameDebouncedListener()
         setupHideDeviceListener()
         setupBranchListener()
+        observeDevice()
     }
 
     // MARK: - Form change listeners
@@ -124,6 +126,19 @@ class DeviceEditViewModel: ObservableObject {
     }
 
     // MARK: - Public API
+
+    /// Navigation can outlive a transport client. Keep form edits while following its replacement.
+    func updateCurrentDevice(from devices: [DeviceWithState]) {
+        guard let current = devices.first(where: { $0.id == device.id }), current !== device else { return }
+        device = current
+        observeDevice()
+    }
+
+    private func observeDevice() {
+        deviceObservation = device.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
 
     func checkForUpdate() async {
         isCheckingForUpdates = true

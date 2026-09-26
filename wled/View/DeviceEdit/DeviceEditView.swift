@@ -1,18 +1,20 @@
 import SwiftUI
+import Combine
 
 struct DeviceEditView: View {
     @Environment(\.managedObjectContext) private var viewContext
 
     @StateObject private var viewModel: DeviceEditViewModel
     @StateObject private var bleDiscoveryService = BleDiscoveryService()
-    @ObservedObject private var device: DeviceWithState
+    private let devices: AnyPublisher<[DeviceWithState], Never>
+    private var device: DeviceWithState { viewModel.device }
     @State private var showBlePicker = false
 
-    init(device: DeviceWithState) {
+    init(device: DeviceWithState, devices: AnyPublisher<[DeviceWithState], Never>? = nil) {
         let context = device.device.managedObjectContext ?? PersistenceController.shared.container.viewContext
         _viewModel = StateObject(wrappedValue: DeviceEditViewModel(device: device, context: context))
 
-        self.device = device
+        self.devices = devices ?? Just([device]).eraseToAnyPublisher()
     }
 
     // MARK: - body
@@ -119,6 +121,7 @@ struct DeviceEditView: View {
         }
         .navigationTitle("Edit Device")
         .navigationBarTitleDisplayMode(.large)
+        .onReceive(devices) { viewModel.updateCurrentDevice(from: $0) }
         .onDisappear { viewModel.cancelBluetoothVerification() }
         .sheet(isPresented: $showBlePicker) {
             BlePeripheralPickerView(discoveryService: bleDiscoveryService) { peripheral in

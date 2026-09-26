@@ -60,12 +60,12 @@ Connect the iPhone over USB and complete the one-time setup:
    pairing and Developer Mode. The harness does not collect the passcode or bypass
    this prompt.
 
-The first five steps were completed for the connected test phone, and the hosted
-BLE/API tests can run unattended. UI automation permission remains pending: the
-first UI attempt displayed that passcode prompt and failed to initialize within
-60 seconds, before any UI test executed. The Mac wrapper verified exact fixture
-restoration afterward; that cleanup is not a UI-test pass. Complete step 6 and
-rerun the UI suite before claiming unattended UI coverage.
+All six commissioning steps are now complete for the connected test phone.
+The first UI attempt timed out at the passcode prompt before tests executed;
+the owner approved the prompt during the second attempt on 2026-09-26, and
+XCTest then operated the normal app. Permission success is separate from test
+success: each run still requires the UI assertions, independent HTTP evidence,
+and exact fixture restoration to pass.
 
 A replacement phone, app identity, or invalidated bond may require commissioning
 again. The BLE commissioning session allows 180 seconds total for
@@ -247,9 +247,10 @@ python3 scripts/run_ble_ui_hil.py --xctestrun "$HIL_UI_XCTESTRUN" \
 
 The UI runner uses the actual app screens and does not create another Bluetooth
 central or request Local Network permission itself. Its process receives
-`BLE_UI_HIL=1` through a derived `.xctestrun`. The launched application explicitly
-receives `BLE_HIL=0` so the DEBUG hosted-test isolation does not replace the normal
-app flow. The original build configuration remains unchanged.
+`BLE_UI_HIL=1` through a derived `.xctestrun`. That configuration removes hosted
+API isolation flags, and the launched application explicitly receives
+`BLE_HIL=0`, so the normal app flow runs. The original build configuration remains
+unchanged.
 
 The test selects an existing saved fixture by display name and validates its MAC
 in Edit Device before control writes. An existing Bluetooth entry is reused. A
@@ -259,20 +260,37 @@ it differs from HTTP `info.name`; ambiguous names fail instead of selecting an
 arbitrary device. The app runs in English with portrait orientation for stable
 accessibility labels.
 
-Coverage includes native power roundtrips, a brightness slider change followed by
-app termination/relaunch and readback, and Home for four seconds followed by
-foreground activation, reconnection, and another power roundtrip. Four seconds
-exceeds the app's two-second background-disconnect policy. The Color control must
-exist and be enabled, but the test does not manipulate the system color picker or
-claim UI color-change coverage. If a Bluetooth entry already existed, that run
-does not claim new-device discovery/Add coverage.
+Once native Bluetooth controls connect, the test keeps the detail screen selected
+and changes its saved connection through Edit Device: Bluetooth → Wi-Fi →
+Bluetooth. It returns to detail after each change, reopens Edit Device to verify
+the Wi-Fi selection, and requires native Bluetooth controls to reconnect after
+switching back. Whenever Bluetooth is selected, it also requires the visible
+Edit Device status indicator to become connected before leaving that screen.
+This catches a navigation destination retaining a retired client while detail
+already observes its replacement. There is **no app relaunch during these transitions**, so this
+independently exercises replacement of the selected device's live state observer.
+The fixture must have both a saved Wi-Fi address and Bluetooth identifier;
+unavailable connection choices fail this coverage rather than being skipped.
+
+The test then exercises native power roundtrips and a brightness slider change.
+Before terminating the app, it uses native back navigation to the device list,
+reopens the fixture, and requires the changed brightness in a fresh detail view
+initialized from authoritative device state. This lets the pending BLE write
+complete and prevents the slider's local display value from standing in for
+readback. Only then does it terminate/relaunch the app and verify brightness
+again. Home for four seconds, foreground activation, reconnection and another
+power roundtrip exercise the app's two-second background-disconnect policy.
+
+The Color control must exist and be enabled, but the test does not manipulate the
+system color picker or claim UI color-change coverage. If a Bluetooth entry
+already existed, that run does not claim new-device discovery/Add coverage.
 
 The Mac wrapper independently captures `/json` before mutation and requires the
 expected MAC, no active preset, playlist, nightlight or realtime input, and
 restorable power, brightness, segment freeze flags and UDP send state. It saves
 the private baseline before temporarily disabling runtime UDP sends: native app
 writes cannot add per-request UDP suppression. Every Mac HTTP mutation first
-rechecks identity and supplies `tt:0` and `udpn.nn:true`. No configuration is
+rechecks identity and supplies `tt:0` and `udpn.nn:true`. No WLED configuration is
 persisted.
 
 During XCTest, the Mac polls HTTP every 0.5 seconds by default, recording bounded
@@ -290,9 +308,14 @@ send state, then compares the complete core API state projection twice, one
 second apart. The projection includes all serialized segment fields and excludes
 transient error flags and usermod connection telemetry. Restoration mismatch
 fails acceptance. The UI test separately restores the original saved connection
-preference and attempts UI state restoration. Exact raw brightness restoration
-belongs to the Mac oracle because XCTest slider positioning is approximate.
-An added saved device entry is retained.
+preference, relaunches the app, and verifies both fixture identity and the retained
+preference in Edit Device. It also restores power and attempts brightness
+restoration through the UI. The brightness gesture is best effort: its achieved
+slider value is recorded without failing solely for a rounded-percentage mismatch.
+Exact raw brightness restoration belongs to the Mac oracle because XCTest slider
+positioning is approximate. Connection, power and preference cleanup failures
+still fail the test, and the Mac's exact full-state check must pass. An added saved
+device entry is retained.
 
 The default outer deadline is 900 seconds; bounded process termination,
 restoration retries and result extraction follow it. Each HTTP request has a

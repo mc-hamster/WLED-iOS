@@ -1,8 +1,10 @@
 import SwiftUI
+import Combine
 
 struct DeviceView: View {
     @Environment(\.colorScheme) var colorScheme
     @ObservedObject var device: DeviceWithState
+    var devices: AnyPublisher<[DeviceWithState], Never>? = nil
     var onSendState: (WledState) -> Void = { _ in }
     var onReconnect: () -> Void = {}
 
@@ -57,7 +59,7 @@ struct DeviceView: View {
         }
         ToolbarItem(placement: .primaryAction) {
             NavigationLink {
-                DeviceEditView(device: device)
+                DeviceEditView(device: device, devices: devices)
             } label: {
                 Label("Settings", systemImage: "gear")
                     .badge(getToolbarBadgeCount())

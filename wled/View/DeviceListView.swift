@@ -67,7 +67,13 @@ struct DeviceListView: View {
                 break
             }
         }
-        .onChange(of: viewModel.allDevicesWithState) { devices in
+        .onReceive(viewModel.$allDevicesWithState) { devices in
+            // Device equality follows its stable ID, but the selected state
+            // wrapper must follow client replacement after a connection edit.
+            let currentSelection = Self.currentSelection(selection, from: devices)
+            if currentSelection !== selection {
+                selection = currentSelection
+            }
             restoreLastSelection(from: devices)
         }
         .onChange(of: selection) { newSelection in
@@ -174,9 +180,9 @@ struct DeviceListView: View {
 
     @ViewBuilder
     private var detailView: some View {
-        if let device = selection {
+        if let device = Self.currentSelection(selection, from: viewModel.allDevicesWithState) {
             NavigationStack {
-                DeviceView(device: device, onSendState: { viewModel.sendState(for: device, state: $0) },
+                DeviceView(device: device, devices: viewModel.$allDevicesWithState.eraseToAnyPublisher(), onSendState: { viewModel.sendState(for: device, state: $0) },
                            onReconnect: { viewModel.reconnect(device) })
             }
         } else {
@@ -271,6 +277,13 @@ struct DeviceListView: View {
     }
 
     // MARK: - Automatic device selection
+
+    static func currentSelection(
+        _ selection: DeviceWithState?, from devices: [DeviceWithState]
+    ) -> DeviceWithState? {
+        guard let selection else { return nil }
+        return devices.first { $0.id == selection.id }
+    }
 
     private func restoreLastSelection(
         from devices: [DeviceWithState],

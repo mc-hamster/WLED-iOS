@@ -17,6 +17,7 @@ final class BleUserInterfaceTests: XCTestCase {
     private var brightnessChanged = false
     private var verifiedIdentity = false
     private var addedBluetooth = false
+    private var connectionPreferenceChanged = false
 
     func testNativeBluetoothControlsAndForegroundReconnect() throws {
         guard environment["BLE_UI_HIL"] == "1" else {
@@ -63,6 +64,17 @@ final class BleUserInterfaceTests: XCTestCase {
         }
 
         try waitForNativeConnection()
+        if originalConnection == nil {
+            originalConnection = try inspectIdentityAndConnection()
+        }
+        _ = try inspectIdentityAndConnection(selecting: "Wi-Fi")
+        guard try inspectIdentityAndConnection() == "Wi-Fi" else {
+            throw UIFailure("Wi-Fi preference was not retained after reopening Edit Device")
+        }
+        _ = try inspectIdentityAndConnection(selecting: "Bluetooth")
+        try waitForNativeConnection()
+        note("Selected detail changed Bluetooth → Wi-Fi → Bluetooth without app relaunch; reopened Edit Device retained Wi-Fi, and native Bluetooth controls reconnected.", name: "Selected device transport replacement")
+
         let power = app.switches["Power"]
         originalPower = try powerValue(power)
         try setPower(!(originalPower ?? false))
@@ -86,6 +98,15 @@ final class BleUserInterfaceTests: XCTestCase {
                 (brightness.value as? String) != self.originalBrightnessValue
             }
             let changedValue = try sliderValue(brightness)
+            // Keep the client alive until a fresh detail view, initialized
+            // from device.stateInfo, confirms the command's readback. Killing
+            // the app immediately after the gesture can cancel its BLE write.
+            try returnToDeviceList()
+            try openFixtureFromList()
+            try waitForNativeConnection()
+            try wait("Brightness did not reach authoritative device state before relaunch") {
+                (self.app.sliders["Brightness"].value as? String) == changedValue
+            }
             // A fresh detail view initializes from the newly fetched device
             // state, avoiding a false pass from Slider's local @State alone.
             try launchAtList()
@@ -100,9 +121,12 @@ final class BleUserInterfaceTests: XCTestCase {
         }
 
         XCUIDevice.shared.press(.home)
-        XCTAssertNotEqual(app.state, .runningForeground)
+        try wait("App did not enter a confirmed background state after Home", timeout: 15) {
+            let state = self.app.state
+            return state == .runningBackground || state == .runningBackgroundSuspended
+        }
         // The product deliberately disconnects clients after two background
-        // seconds. This interval exercises that policy, not a transient alert.
+        // seconds. Start this interval only after background is observed.
         Thread.sleep(forTimeInterval: 4)
         app.activate()
         guard app.wait(for: .runningForeground, timeout: 15) else {
@@ -132,6 +156,25 @@ final class BleUserInterfaceTests: XCTestCase {
             throw UIFailure("Saved fixture display name was missing or ambiguous")
         }
         row.tap()
+    }
+
+    private func returnToDeviceList() throws {
+        // BackButton is the native navigation identifier observed on the
+        // physical phone; Device List is the production sidebar title.
+        let matches = app.navigationBars.buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", "BackButton", "Device List")
+        )
+        try wait("Native back navigation to Device List is unavailable") {
+            matches.allElementsBoundByIndex.filter(\.isHittable).count == 1
+        }
+        let visible = matches.allElementsBoundByIndex.filter(\.isHittable)
+        guard visible.count == 1 else { throw UIFailure("Native back navigation is ambiguous") }
+        visible[0].tap()
+        try wait("Back navigation did not return to Device List") {
+            self.app.navigationBars["Device List"].isHittable &&
+                self.app.buttons["Add Device"].isHittable &&
+                !self.app.switches["Power"].isHittable
+        }
     }
 
     private func addBluetoothFixture() throws {
@@ -169,7 +212,7 @@ final class BleUserInterfaceTests: XCTestCase {
         XCTAssertTrue(app.buttons["Add Device"].waitForExistence(timeout: 10))
     }
 
-    private func inspectIdentityAndConnection() throws -> String {
+    private func inspectIdentityAndConnection(selecting desired: String? = nil) throws -> String {
         let settings = app.navigationBars.buttons["Settings"]
         guard settings.waitForExistence(timeout: 15) else { throw UIFailure("Device Settings navigation is missing") }
         settings.tap()
@@ -187,7 +230,26 @@ final class BleUserInterfaceTests: XCTestCase {
         guard wifi.exists, bluetooth.exists, wifi.isSelected != bluetooth.isSelected else {
             throw UIFailure("Saved connection preference cannot be identified")
         }
+        if let desired {
+            guard desired == "Wi-Fi" || desired == "Bluetooth" else {
+                throw UIFailure("Unknown requested connection preference")
+            }
+            let choice = desired == "Bluetooth" ? bluetooth : wifi
+            guard choice.isEnabled else {
+                throw UIFailure("Fixture lacks the \(desired) connection needed for transport replacement coverage")
+            }
+            if !choice.isSelected {
+                connectionPreferenceChanged = true // Cleanup owns a possibly applied preference change.
+                choice.tap()
+            }
+            try wait("Selected connection preference did not update") { choice.isSelected }
+        }
         let selected = bluetooth.isSelected ? "Bluetooth" : "Wi-Fi"
+        if selected == "Bluetooth" {
+            try wait("Edit Device did not show the active Bluetooth connection", timeout: 90) {
+                self.app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Status: Connected")).allElementsBoundByIndex.contains { $0.isHittable }
+            }
+        }
         app.navigationBars["Edit Device"].buttons.element(boundBy: 0).tap()
         return selected
     }
@@ -221,7 +283,8 @@ final class BleUserInterfaceTests: XCTestCase {
     }
 
     private func restoreFixture() throws {
-        guard verifiedIdentity, originalPower != nil || brightnessChanged || addedBluetooth else { return }
+        guard verifiedIdentity,
+              originalPower != nil || brightnessChanged || addedBluetooth || connectionPreferenceChanged else { return }
         // Relaunching also closes any discovery/edit sheet left by a failure.
         try launchAtList()
         try openFixtureFromList()
@@ -231,12 +294,8 @@ final class BleUserInterfaceTests: XCTestCase {
             if brightnessChanged, let baseline = originalBrightness {
                 app.sliders["Brightness"].adjust(toNormalizedSliderPosition: CGFloat(baseline - 1) / 254)
                 Thread.sleep(forTimeInterval: 2)
-                try launchAtList()
-                try openFixtureFromList()
-                try waitForNativeConnection()
-                try wait("Restored brightness was not present after reconnect") {
-                    (self.app.sliders["Brightness"].value as? String) == self.originalBrightnessValue
-                }
+                let achieved = (try? sliderValue(app.sliders["Brightness"])) ?? "unavailable"
+                note("Best-effort UI brightness restoration targeted raw value \(baseline); observed slider value: \(achieved). Exact restoration is verified by the Mac HTTP oracle.", name: "Brightness cleanup")
             }
             if let originalPower { try setPower(originalPower) }
         } catch {
@@ -252,6 +311,11 @@ final class BleUserInterfaceTests: XCTestCase {
                 if !choice.isSelected { choice.tap() }
                 try wait("Original connection preference was not restored") { choice.isSelected }
                 app.navigationBars["Edit Device"].buttons.element(boundBy: 0).tap()
+                try launchAtList()
+                try openFixtureFromList()
+                guard try inspectIdentityAndConnection() == originalConnection else {
+                    throw UIFailure("Original connection preference did not persist after relaunch")
+                }
             } catch {
                 failures.append("Original preferred connection could not be restored")
             }

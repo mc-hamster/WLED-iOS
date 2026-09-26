@@ -375,11 +375,13 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
             }
         }
 
-        // Only update if content changed to avoid unnecessary SwiftUI view body evaluations
-        if self.onlineDevices != online {
+        // A transport/configuration change replaces the client and its state
+        // wrapper, while the device ID stays the same. Publish that replacement
+        // so rows stop observing the retired client's disconnected state.
+        if !self.onlineDevices.elementsEqual(online, by: { $0 === $1 }) {
             self.onlineDevices = online
         }
-        if self.offlineDevices != offline {
+        if !self.offlineDevices.elementsEqual(offline, by: { $0 === $1 }) {
             self.offlineDevices = offline
         }
     }
