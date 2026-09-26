@@ -19,6 +19,9 @@ struct BlePeripheralPickerView: View {
                     }
                 }
                 Section("Nearby WLED Devices") {
+                    if discoveryService.peripherals.isEmpty && !discoveryService.isScanning && discoveryService.bluetoothState == .poweredOn {
+                        Text("No devices found. Keep WLED nearby, release its connection on other phones, then tap Scan. Saved devices do not need to be added again.").foregroundStyle(.secondary)
+                    }
                     ForEach(discoveryService.peripherals) { peripheral in
                         Button {
                             onSelect(peripheral)
@@ -27,9 +30,9 @@ struct BlePeripheralPickerView: View {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(peripheral.name).font(.headline)
-                                    Text(peripheral.signalDescription).font(.caption).foregroundStyle(.secondary)
+                                    Text("Signal at discovery: \(peripheral.signalDescription)").font(.caption).foregroundStyle(.secondary)
                                     if discoveryService.peripherals.filter({ $0.name == peripheral.name }).count > 1 {
-                                        Text("Device ending in \(String(peripheral.id.uuidString.suffix(4)))")
+                                        Text("Identifier ending in \(String(peripheral.id.uuidString.suffix(4)))")
                                             .font(.caption).foregroundStyle(.secondary)
                                     }
                                 }

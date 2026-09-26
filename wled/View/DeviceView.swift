@@ -2,93 +2,50 @@ import SwiftUI
 import Combine
 
 struct DeviceView: View {
-    @Environment(\.colorScheme) var colorScheme
     @ObservedObject var device: DeviceWithState
     var devices: AnyPublisher<[DeviceWithState], Never>? = nil
     var onSendState: (WledState) -> Void = { _ in }
     var onReconnect: () -> Void = {}
-
-    @State var showDownloadFinished = false
-    @State var shouldWebViewRefresh = false
-
-    @State var showEditDeviceView = false
+    @State private var showConnection = false
 
     var body: some View {
+        BleDeviceDetailView(device: device, onSendState: onSendState, onReconnect: onReconnect)
+            .onAppear { device.openAction() }
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Button { showConnection = true } label: { DeviceInfoTwoRows(device: device) }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Connection: \(device.connectionSummary)")
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    NavigationLink {
+                        DeviceEditView(device: device, devices: devices)
+                    } label: { Label("Settings", systemImage: "gear").badge(device.hasUpdateAvailable ? 1 : 0) }
+                }
+            }
+            .sheet(isPresented: $showConnection) { ConnectionView(device: device, devices: devices) }
+    }
+}
+
+struct DeviceWebInterfaceView: View {
+    @ObservedObject var device: DeviceWithState
+    @State private var refresh = false
+    @State private var downloadFinished = false
+    var body: some View {
         Group {
-            if device.device.preferredConnectionType == .ble {
-                BleDeviceDetailView(device: device, onSendState: onSendState, onReconnect: onReconnect)
-                    .toolbar { toolbar }
+            if device.isOnline && device.activeTransport == .wifi {
+                WebView(url: URL(string: "http://\(device.device.wifiAddress)"), reload: $refresh) { _ in downloadFinished = true }
             } else {
-                ZStack {
-                    WebView(url: getDeviceAddress(), reload: $shouldWebViewRefresh) { _ in
-                        withAnimation {
-                            showDownloadFinished = true
-                        }
-                        Task {
-                            try await Task.sleep(for: .seconds(3))
-                            withAnimation {
-                                showDownloadFinished = false
-                            }
-                        }
-                    }
-                    if showDownloadFinished {
-                        VStack {
-                            Spacer()
-                            Text("Download Completed")
-                                .font(.title3)
-                                .padding()
-                                .background(.regularMaterial)
-                                .clipShape(RoundedRectangle(cornerRadius: 15))
-                                .padding(.bottom)
-                        }
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .zIndex(1)
-                    }
-                }
-                .navigationTitle(device.device.displayName)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { toolbar }
+                VStack(spacing: 16) {
+                    Text("The full web interface needs Wi-Fi").font(.headline)
+                    Text("Your basic controls remain available over Bluetooth. Close this page and choose Wi-Fi in Connection to open the full interface.")
+                }.padding()
             }
         }
-    }
-
-    @ToolbarContentBuilder
-    var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            DeviceInfoTwoRows(device: device)
-        }
-        ToolbarItem(placement: .primaryAction) {
-            NavigationLink {
-                DeviceEditView(device: device, devices: devices)
-            } label: {
-                Label("Settings", systemImage: "gear")
-                    .badge(getToolbarBadgeCount())
-            }
-        }
-        if device.device.preferredConnectionType == .wifi {
-            ToolbarItem(placement: .automatic) {
-                Button("Refresh", systemImage: "arrow.clockwise") {
-                    shouldWebViewRefresh = true
-                }
-            }
-        }
-    }
-
-    func getDeviceAddress() -> URL? {
-        guard let deviceAddress = device.device.address,
-              let url = URL(string: "http://\(deviceAddress)") else {
-            return nil
-        }
-        return url
-    }
-
-    func getToolbarBadgeCount() -> Int {
-        return device.hasUpdateAvailable ? 1 : 0
+        .navigationTitle("Web interface · Wi-Fi")
+        .toolbar { Button("Refresh") { refresh = true } }
+        .alert("Download completed", isPresented: $downloadFinished) { Button("OK", role: .cancel) {} }
     }
 }
 
-#Preview {
-    NavigationStack {
-        DeviceView(device: PreviewData.onlineDevice)
-    }
-}
+#Preview { NavigationStack { DeviceView(device: PreviewData.onlineDevice) } }

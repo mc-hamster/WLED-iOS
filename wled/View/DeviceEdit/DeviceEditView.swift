@@ -35,32 +35,28 @@ struct DeviceEditView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Connection")
-                    Picker("Connection", selection: $viewModel.connectionType) {
-                        ForEach(DeviceConnectionType.allCases) { connectionType in
-                            Text(connectionType.displayName)
-                                .tag(connectionType)
-                                .disabled(connectionType == .ble ? viewModel.bleIdentifier.isEmpty : viewModel.wifiAddress.isEmpty)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
+                    ConnectionSections(device: device)
+                    Divider()
                     Text("Wi-Fi Address")
                     TextField("Wi-Fi Address", text: $viewModel.wifiAddress)
                         .keyboardType(.URL)
                         .textFieldStyle(.roundedBorder)
 
+                    Button(viewModel.isVerifyingAddress ? "Checking address…" : "Test and Apply Address") { viewModel.applyWifiAddress() }
+                        .disabled(viewModel.isVerifyingAddress || viewModel.wifiAddress == device.device.wifiAddress)
+                    if let message = viewModel.addressMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
+                    Text("This changes the app's saved address, not WLED's Wi-Fi settings. Your current connection stays unchanged until verification succeeds.").font(.caption).foregroundStyle(.secondary)
                     Divider()
 
                     Text("Bluetooth")
-                    Button(viewModel.bleName.isEmpty ? "Select BLE Device" : viewModel.bleName) {
+                    Button(viewModel.bleName.isEmpty ? "Select Bluetooth Device" : viewModel.bleName) {
                         showBlePicker = true
                     }
                     .buttonStyle(.bordered)
 
                     Text("Pairing is managed by iOS. Find the pairing code in WLED Settings → Usermods → BleApiBridge.")
                         .font(.caption).foregroundStyle(.secondary)
-                    if viewModel.isVerifyingBluetooth { ProgressView("Checking device…") }
+                    if viewModel.isVerifyingBluetooth { ProgressView("Checking device…"); Button("Cancel verification") { viewModel.cancelBluetoothVerification() } }
                     if let error = viewModel.bleConnectionError { Text(error).font(.caption).foregroundStyle(.red) }
 
                 }
@@ -68,6 +64,8 @@ struct DeviceEditView: View {
                 Toggle("Hide this Device", isOn: $viewModel.hideDevice)
                     .padding(.trailing, 2)
                     .padding(.bottom)
+
+                Text("Hide changes the list only. Use Disconnect to release an active connection.").font(.caption).foregroundStyle(.secondary)
 
                 if device.canInstallStockFirmware {
                     HStack {
@@ -122,7 +120,7 @@ struct DeviceEditView: View {
         .navigationTitle("Edit Device")
         .navigationBarTitleDisplayMode(.large)
         .onReceive(devices) { viewModel.updateCurrentDevice(from: $0) }
-        .onDisappear { viewModel.cancelBluetoothVerification() }
+        .onDisappear { viewModel.cancelBluetoothVerification(); viewModel.cancelAddressVerification() }
         .sheet(isPresented: $showBlePicker) {
             BlePeripheralPickerView(discoveryService: bleDiscoveryService) { peripheral in
                 viewModel.updateSelectedBlePeripheral(peripheral)

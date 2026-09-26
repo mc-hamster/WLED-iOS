@@ -185,6 +185,8 @@ def ui_configuration(base, source_root, args, baseline):
                 del mapping[key]
     environment.update({"BLE_UI_HIL": "1", "BLE_UI_MAC": args.mac, "BLE_UI_NAME": args.advertised_name,
                         "BLE_UI_DEVICE_NAME": args.device_name or baseline["info"].get("name") or "WLED"})
+    if getattr(args, "fallback_address", None):
+        environment["BLE_UI_FALLBACK_ADDRESS"] = args.fallback_address
     if args.brightness:
         environment["BLE_UI_BRIGHTNESS"] = str(baseline["restore"]["bri"])
     target["ParallelizationEnabled"] = False
@@ -408,6 +410,7 @@ def parse_args(argv=None):
     parser.add_argument("--http-url", default="http://10.10.41.74")
     parser.add_argument("--mac", default="a4cb8fdb2cb8")
     parser.add_argument("--advertised-name", default="WLED-db2cb8")
+    parser.add_argument("--fallback-address", help="Read-only fault proxy endpoint for a verified Wi-Fi failure/BLE fallback test")
     parser.add_argument("--device-name", help="Saved app display name, if it differs from firmware info.name")
     parser.add_argument("--no-brightness", dest="brightness", action="store_false", help="Verify power/lifecycle only; do not claim brightness coverage")
     parser.add_argument("--timeout", type=float, default=900, help="Whole test deadline; bounded process stop/restoration follow")
@@ -429,6 +432,8 @@ def parse_args(argv=None):
     try:
         args.mac = normalize_mac(args.mac)
         HttpOracle(args.http_url, args.mac)
+        if args.fallback_address:
+            HttpOracle("http://" + args.fallback_address, args.mac)
     except (CheckFailure, ValueError, TypeError):
         parser.error("invalid fixture MAC or literal-IP HTTP origin")
     return args

@@ -31,6 +31,32 @@ class DeviceWithState: ObservableObject, Identifiable {
     @Published var availableUpdateVersion: String?
     @Published var connectionError: String?
 
+    @Published var activeTransport: DeviceConnectionType?
+    @Published var attemptedTransport: DeviceConnectionType?
+    @Published var manuallyDisconnected = false
+    @Published var autoConnect = false
+    @Published var recoveryMessage: String?
+    @Published var commandMessage: String?
+    @Published var lastConfirmedAt: Date?
+    @Published var requiresUserAction = false
+    @Published var isSending = false
+    @Published var routeMessages: [DeviceConnectionType: String] = [:]
+    var connectAction: () -> Void = {}
+    var disconnectAction: () -> Void = {}
+    var openAction: () -> Void = {}
+    var modeAction: (DeviceConnectionMode) -> Void = { _ in }
+    var autoConnectAction: (Bool) -> Void = { _ in }
+
+    var connectionSummary: String {
+        if manuallyDisconnected { return "Disconnected by you" }
+        let route = activeTransport ?? attemptedTransport
+        switch websocketStatus {
+        case .connected: return route.map { "Connected via \($0.displayName)" } ?? "Connected"
+        case .connecting: return route.map { "Connecting via \($0.displayName)…" } ?? "Connecting…"
+        case .disconnected: return "Disconnected"
+        }
+    }
+
     nonisolated let id: String
 
     init(initialDevice: Device) {

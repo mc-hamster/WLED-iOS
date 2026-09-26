@@ -53,8 +53,8 @@ actor DeviceFirstContactService {
     ///
     /// - Parameter rawAddress: The network address input (e.g., "http://192.168.1.1/" or "wled.local").
     /// - Returns: The NSManagedObjectID of the device (to be retrieved safely on the main thread).
-    func fetchAndUpsertDevice(rawAddress: String) async throws -> NSManagedObjectID {
-        let cleanAddress = sanitize(address: rawAddress)
+    func fetchAndUpsertDevice(rawAddress: String, discovered: Bool = false) async throws -> NSManagedObjectID {
+        let cleanAddress = try validatedDeviceAddress(rawAddress)
 
         logger.debug("Initiating contact with: \(cleanAddress)")
         let info = try await fetchDeviceInfo(address: cleanAddress)
@@ -64,6 +64,8 @@ actor DeviceFirstContactService {
             throw ServiceError.missingMacAddress
         }
 
+        if discovered && UserDefaults.standard.bool(forKey: "ignoredDevice." + normalizedDeviceMAC(macAddress)) { throw CancellationError() }
+        if !discovered { UserDefaults.standard.removeObject(forKey: "ignoredDevice." + normalizedDeviceMAC(macAddress)) }
         return try await upsertWifiDevice(macAddress: macAddress, hostname: cleanAddress, name: info.name)
     }
 
@@ -78,6 +80,7 @@ actor DeviceFirstContactService {
         }
 
         try Task.checkCancellation()
+        UserDefaults.standard.removeObject(forKey: "ignoredDevice." + normalizedDeviceMAC(macAddress))
         return try await upsertBleDevice(
             macAddress: macAddress,
             peripheralID: peripheralID,
@@ -143,7 +146,7 @@ actor DeviceFirstContactService {
     }
 
     /// Fetches device information from the specified address.
-    private func fetchDeviceInfo(address: String) async throws -> Info {
+    func fetchDeviceInfo(address: String) async throws -> Info {
         // Construct URL, ensuring http scheme and json/info path
         let urlString = "http://\(address)/json/info"
 
@@ -250,7 +253,7 @@ actor DeviceFirstContactService {
                     existingDevice.address = ""
                 }
                 existingDevice.originalName = name
-                existingDevice.connectionType = DeviceConnectionType.ble.rawValue
+                // Adding another method preserves the user's existing route choice.
                 existingDevice.bleIdentifier = identifierString
                 existingDevice.bleName = bleName
                 existingDevice.bleSecurityMode = nil

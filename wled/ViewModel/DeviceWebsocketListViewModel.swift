@@ -29,12 +29,7 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
     }
 
     var makeClient: (Device) -> any DeviceConnectionClient = { device in
-        switch device.preferredConnectionType {
-        case .ble:
-            return BleClient(device: device)
-        case .wifi:
-            return WebsocketClient(device: device)
-        }
+        DeviceConnectionController(device: device)
     }
 
     // MARK: - Private Properties
@@ -57,8 +52,6 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
     /// Exposed as `internal` so tests can override with a shorter value.
     var backgroundDisconnectDelay: Duration = .seconds(2)
     
-    /// Amount of time after a device becomes offline before it is considered offline.
-    private let offlineGracePeriod: TimeInterval = 60
     private var cancellables = Set<AnyCancellable>()
     private let sortingQueue = DispatchQueue(label: "com.wled.DeviceSortingQueue")
 
@@ -180,8 +173,13 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
             if let existingWrapper = activeClients[mac] {
                 if existingWrapper.configurationSignature != configurationSignature {
                     print("[ListVM] Connection config changed for \(mac). Recreating client.")
-                    existingWrapper.client.destroy()
-                    createAndAddClient(for: device, mac: mac)
+                    if let controller = existingWrapper.client as? DeviceConnectionController {
+                        controller.reconfigure()
+                        activeClients[mac] = ClientWrapper(client: controller, configurationSignature: configurationSignature)
+                    } else {
+                        existingWrapper.client.destroy()
+                        createAndAddClient(for: device, mac: mac)
+                    }
                 } else {
                     // Device object changes are already observed by DeviceWithState.
                 }
@@ -212,10 +210,7 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
     }
 
     private func clientConfigurationSignature(for device: Device) -> String {
-        if device.preferredConnectionType == .ble {
-            return "ble|\(device.bleIdentifier ?? "")"
-        }
-        return "wifi|\(device.wifiAddress)"
+        "\(device.connectionMode.rawValue)|\(device.wifiAddress)|\(device.bleIdentifier ?? "")"
     }
 
     private func handleDeviceUpdate(deviceID: NSManagedObjectID, info: DeviceStateInfo) {
@@ -317,7 +312,7 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
             print("[ListVM] No active client for \(deviceWrapper.device.macAddress ?? "nil")")
             return
         }
-        deviceWrapper.stateInfo?.state.brightness = Int64(brightness)
+        guard deviceWrapper.isOnline else { return }
         wrapper.client.sendState(WledState(brightness: Int64(brightness)))
     }
     
@@ -327,7 +322,7 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
             print("[ListVM] No active client for \(deviceWrapper.device.macAddress ?? "nil")")
             return
         }
-        deviceWrapper.stateInfo?.state.isOn = isOn
+        guard deviceWrapper.isOnline else { return }
         wrapper.client.sendState(WledState(isOn: isOn))
     }
     
@@ -338,12 +333,16 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
 
     func reconnect(_ device: DeviceWithState) {
         guard let mac = device.device.macAddress else { return }
-        activeClients[mac]?.client.disconnect()
-        activeClients[mac]?.client.connect()
+        if let controller = activeClients[mac]?.client as? DeviceConnectionController { controller.connectByUser() }
+        else {
+            activeClients[mac]?.client.disconnect()
+            activeClients[mac]?.client.connect()
+        }
     }
 
     func deleteDevice(_ device: Device) {
         print("[ListVM] Deleting device \(device.originalName ?? "")")
+        UserDefaults.standard.set(true, forKey: "ignoredDevice." + normalizedDeviceMAC(device.macAddress))
         // Capture context locally to avoid isolation issues in the closure
         let objectID = device.objectID
         let ctx = context
@@ -364,10 +363,7 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
         var online: [DeviceWithState] = []
         var offline: [DeviceWithState] = []
         for device in sorted {
-            let isConsideredOnline = device.isOnline || {
-                let lastSeenDate = Date(timeIntervalSince1970: TimeInterval(device.device.lastSeen) / 1000.0)
-                return currentTime.timeIntervalSince(lastSeenDate) < offlineGracePeriod
-            }()
+            let isConsideredOnline = device.isOnline
             if isConsideredOnline {
                 online.append(device)
             } else {
@@ -400,12 +396,13 @@ class DeviceWebsocketListViewModel: NSObject, ObservableObject, NSFetchedResults
     }
 
     private func deviceDiscovered(at address: String, withMACAddress macAddress: String?) {
+        if let macAddress, UserDefaults.standard.bool(forKey: "ignoredDevice." + normalizedDeviceMAC(macAddress)) { return }
         Task {
             do {
                 if await !deviceFirstContactService
                     .tryUpdateAddress(macAddress: macAddress, address: address) {
                     _ = try await deviceFirstContactService
-                        .fetchAndUpsertDevice(rawAddress: address)
+                        .fetchAndUpsertDevice(rawAddress: address, discovered: true)
                 }
             } catch {
                 print("deviceDiscovered: Failed to upsert device: \(error)")

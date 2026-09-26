@@ -9,6 +9,7 @@ final class BleDiscoveryService: NSObject, ObservableObject {
 
     private lazy var centralManager = CBCentralManager(delegate: self, queue: nil)
     private var scanRequested = false
+    private var scanDeadline: Task<Void, Never>?
     private var peripheralMap: [UUID: BleDiscoveredPeripheral] = [:]
 
     override init() {
@@ -16,11 +17,16 @@ final class BleDiscoveryService: NSObject, ObservableObject {
     }
 
     func startScan() {
+        scanDeadline?.cancel()
         scanRequested = true
         guard centralManager.state == .poweredOn else { return }
         peripheralMap.removeAll()
         peripherals = []
         isScanning = true
+        scanDeadline = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(20)) } catch { return }
+            self?.stopScan()
+        }
         centralManager.scanForPeripherals(
             withServices: [BleBridgeConstants.serviceUUID],
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
@@ -28,6 +34,7 @@ final class BleDiscoveryService: NSObject, ObservableObject {
     }
 
     func stopScan() {
+        scanDeadline?.cancel(); scanDeadline = nil
         scanRequested = false
         if isScanning { centralManager.stopScan() }
         isScanning = false

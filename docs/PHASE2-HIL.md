@@ -403,3 +403,28 @@ These tests use fake HTTP and subprocess responses; they do not build the app or
 access either device. They check configuration isolation, compiled-code
 fingerprints, result handling, and restoration/failure behavior. The current
 13-test verification is recorded in `build/phase2/runner-final2-tests.log`.
+
+## Connection workflow fault test
+
+The native UI now covers common controls on Wi-Fi and Bluetooth, the explicit
+Connection sheet, and Disconnect persistence across app relaunch. The hosted
+identity checks require the test Device to use the MAC verified during fixture
+preparation, rather than a placeholder name.
+
+For an additional real fallback case, start a read-only proxy on a laptop LAN
+address reachable by the phone, then pass that address to the UI runner:
+
+```sh
+python3 scripts/ble_fallback_proxy.py --listen LAPTOP_LAN_IP --port 8769 --upstream http://BOARD_IP
+python3 scripts/run_ble_ui_hil.py --xctestrun "$HIL_UI_XCTESTRUN" \
+  --device "$HIL_DEVICE" --fallback-address LAPTOP_LAN_IP:8769
+```
+
+The proxy forwards `/json/info` for identity verification and rejects `/ws` with
+503. The UI temporarily changes only the app's saved address, selects Automatic,
+requires Bluetooth control/readback, then restores and verifies the original
+address. Teardown also attempts this restoration after test failures. If teardown
+cannot run (for example, device removal), restore the saved address through Edit
+Device → Test and Apply Address before normal use. Stop the proxy after cleanup.
+The board's network configuration is not changed. The ordinary Mac oracle still
+uses the board's real address and verifies exact light-state restoration.

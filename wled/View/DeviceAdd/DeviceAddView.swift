@@ -120,15 +120,15 @@ struct DeviceAddBleForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("BLE Device")
-            Button(viewModel.selectedBlePeripheral?.name ?? "Select BLE Device") {
+            Text("Bluetooth Device")
+            Button(viewModel.selectedBlePeripheral?.name ?? "Select Bluetooth Device") {
                 showBlePicker = true
             }
             .buttonStyle(.bordered)
 
             Label("Pair securely with iOS", systemImage: "lock.shield")
                 .font(.subheadline)
-            Text("Find your six-digit pairing code in WLED Settings → Usermods → BleApiBridge. Enter it only when iOS asks. Your iPhone remembers this device for next time.")
+            Text("Find your six-digit pairing code in WLED Settings → Usermods → BleApiBridge. Enter it only when iOS asks. If you cannot reach that settings page, obtain the code from whoever configured the device before continuing. iOS manages pairing for future connections.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -175,7 +175,8 @@ struct DeviceAddStep3Success: View {
             .font(.system(size: 50))
             .foregroundStyle(.green)
             .padding()
-        Text("\(device.displayName) was added")
+        Text("\(device.displayName) is saved")
+        Text("Existing devices keep their connection choice. Open Connection to choose Wi-Fi, Bluetooth or Automatic.").font(.callout).foregroundStyle(.secondary)
     }
 }
 

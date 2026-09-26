@@ -11,6 +11,7 @@ struct DeviceListItemView: View {
     var onTogglePower: (Bool) -> Void
     var onChangeBrightness: (Int) -> Void
 
+    @State private var showConnection = false
     @State private var brightness: Double = 0.0
 
     var body: some View {
@@ -23,8 +24,8 @@ struct DeviceListItemView: View {
             HStack {
                 DeviceInfoTwoRows(device: device)
 
-                Toggle("Turn On/Off", isOn: isOnBinding)
-                    .labelsHidden()
+                Toggle("Lights", isOn: isOnBinding)
+                    .disabled(!device.isOnline)
                     .frame(alignment: .trailing)
                     // On iOS 16, tapping the Toggle also triggers the parent row's .onTapGesture.
                     // This empty handler "consumes" the SwiftUI tap at the child level,
@@ -43,11 +44,20 @@ struct DeviceListItemView: View {
                     }
                 }
             )
+            .disabled(!device.isOnline)
+            .accessibilityLabel("Brightness for \(device.device.displayName)")
+            Button("Connection") { showConnection = true }.buttonStyle(.borderless)
+            if let message = device.commandMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
+            if !device.isOnline, device.stateInfo != nil { Text("Last known values").font(.caption).foregroundStyle(.secondary) }
         }
+        .sheet(isPresented: $showConnection) { ConnectionView(device: device) }
         .applyDeviceSelectionStyle(isSelected: isSelected, color: fixedDeviceColor)
         .animation(.linear(duration: 0.3), value: fixedDeviceColor)
         .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
         .onAppear {
+            brightness = Double(device.stateInfo?.state.brightness ?? 0)
+        }
+        .onChange(of: device.websocketStatus) { _ in
             brightness = Double(device.stateInfo?.state.brightness ?? 0)
         }
         .onChange(of: device.stateInfo?.state.brightness) { _ in

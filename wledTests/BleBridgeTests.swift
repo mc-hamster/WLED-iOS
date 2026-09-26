@@ -410,7 +410,7 @@ struct BleBridgeTests {
         device.bleIdentifier = UUID().uuidString
         device.connectionType = "wifi"
         #expect(device.wifiAddress.isEmpty)
-        #expect(device.preferredConnectionType == .ble)
+        #expect(device.preferredConnectionType == .wifi) // Explicit Wi-Fi mode must fail clearly, never silently select BLE.
     }
 
     @Test func obsoletePairingSecretsAreRemovedWithoutLosingDeviceIdentity() throws {

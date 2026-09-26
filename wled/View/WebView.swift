@@ -267,6 +267,13 @@ struct WebView: UIViewRepresentable {
 
     }
 
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        webView.stopLoading()
+        webView.loadHTMLString("", baseURL: nil)
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }

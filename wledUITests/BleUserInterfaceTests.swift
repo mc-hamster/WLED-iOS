@@ -11,6 +11,8 @@ final class BleUserInterfaceTests: XCTestCase {
     private let app = XCUIApplication()
     private var deviceName = "WLED"
     private var originalConnection: String?
+    private var originalWifiAddress: String?
+    private var addressChanged = false
     private var originalPower: Bool?
     private var originalBrightness: Int?
     private var originalBrightnessValue: String?
@@ -52,7 +54,7 @@ final class BleUserInterfaceTests: XCTestCase {
                 try launchAtList()
                 try addBluetoothFixture()
                 try openFixtureFromList()
-                _ = try inspectIdentityAndConnection()
+                _ = try inspectIdentityAndConnection(selecting: "Bluetooth")
             } else {
                 note("Existing BLE entry reused; Add flow was not rerun because this app may already occupy the peripheral.", name: "Entry path")
             }
@@ -71,8 +73,19 @@ final class BleUserInterfaceTests: XCTestCase {
         guard try inspectIdentityAndConnection() == "Wi-Fi" else {
             throw UIFailure("Wi-Fi preference was not retained after reopening Edit Device")
         }
+        _ = try inspectIdentityAndConnection(selecting: "Automatic")
+        try wait("Automatic mode did not choose Wi-Fi", timeout: 30) {
+            self.app.staticTexts["Connected via Wi-Fi"].firstMatch.exists && self.app.switches["Power"].isEnabled
+        }
+        let wifiPower = try powerValue(app.switches["Power"])
+        originalPower = wifiPower
+        try setPower(!wifiPower)
+        try setPower(wifiPower)
+        note("Native power roundtrip succeeded while active route was Wi-Fi.", name: "Wi-Fi native controls")
         _ = try inspectIdentityAndConnection(selecting: "Bluetooth")
         try waitForNativeConnection()
+        try verifyPersistentDisconnect()
+        if let faultAddress = environment["BLE_UI_FALLBACK_ADDRESS"] { try verifyNetworkFallback(address: faultAddress) }
         note("Selected detail changed Bluetooth → Wi-Fi → Bluetooth without app relaunch; reopened Edit Device retained Wi-Fi, and native Bluetooth controls reconnected.", name: "Selected device transport replacement")
 
         let power = app.switches["Power"]
@@ -182,7 +195,7 @@ final class BleUserInterfaceTests: XCTestCase {
         let bluetooth = app.segmentedControls.buttons["Bluetooth"]
         guard bluetooth.waitForExistence(timeout: 10) else { throw UIFailure("New Device connection picker is missing") }
         bluetooth.tap()
-        app.buttons["Select BLE Device"].tap()
+        app.buttons["Select Bluetooth Device"].tap()
         guard app.navigationBars["Nearby WLED"].waitForExistence(timeout: 10) else {
             throw UIFailure("BLE discovery sheet did not open")
         }
@@ -227,14 +240,15 @@ final class BleUserInterfaceTests: XCTestCase {
         verifiedIdentity = true
         let wifi = app.segmentedControls.buttons["Wi-Fi"]
         let bluetooth = app.segmentedControls.buttons["Bluetooth"]
-        guard wifi.exists, bluetooth.exists, wifi.isSelected != bluetooth.isSelected else {
+        let automatic = app.segmentedControls.buttons["Automatic"]
+        guard wifi.exists, bluetooth.exists, automatic.exists, [wifi, bluetooth, automatic].filter({ $0.isSelected }).count == 1 else {
             throw UIFailure("Saved connection preference cannot be identified")
         }
         if let desired {
-            guard desired == "Wi-Fi" || desired == "Bluetooth" else {
+            guard ["Wi-Fi", "Bluetooth", "Automatic"].contains(desired) else {
                 throw UIFailure("Unknown requested connection preference")
             }
-            let choice = desired == "Bluetooth" ? bluetooth : wifi
+            let choice = app.segmentedControls.buttons[desired]
             guard choice.isEnabled else {
                 throw UIFailure("Fixture lacks the \(desired) connection needed for transport replacement coverage")
             }
@@ -244,7 +258,7 @@ final class BleUserInterfaceTests: XCTestCase {
             }
             try wait("Selected connection preference did not update") { choice.isSelected }
         }
-        let selected = bluetooth.isSelected ? "Bluetooth" : "Wi-Fi"
+        let selected = bluetooth.isSelected ? "Bluetooth" : (wifi.isSelected ? "Wi-Fi" : "Automatic")
         if selected == "Bluetooth" {
             try wait("Edit Device did not show the active Bluetooth connection", timeout: 90) {
                 self.app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Status: Connected")).allElementsBoundByIndex.contains { $0.isHittable }
@@ -254,9 +268,72 @@ final class BleUserInterfaceTests: XCTestCase {
         return selected
     }
 
+    private func verifyPersistentDisconnect() throws {
+        app.buttons["Connection"].tap()
+        let disconnect = app.buttons["disconnect-device"]
+        guard disconnect.waitForExistence(timeout: 10) else { throw UIFailure("Disconnect is missing") }
+        disconnect.tap()
+        try wait("Explicit disconnect not reflected") { self.app.staticTexts["Disconnected by you"].firstMatch.exists }
+        app.buttons["Done"].tap()
+        XCTAssertFalse(app.switches["Power"].isEnabled)
+        try launchAtList()
+        try openFixtureFromList()
+        try wait("Disconnect did not survive relaunch") {
+            self.app.staticTexts["Disconnected by you"].firstMatch.exists && !self.app.switches["Power"].isEnabled
+        }
+        app.buttons["Connection"].tap()
+        app.buttons["connect-device"].tap()
+        app.buttons["Done"].tap()
+        try waitForNativeConnection()
+        note("Disconnect persisted across app relaunch and opening the device, disabled controls, and required explicit Connect.", name: "Manual disconnect")
+    }
+
+    private func applyAddress(_ address: String, captureOriginal: Bool = false) throws {
+        app.navigationBars.buttons["Settings"].tap()
+        let field = app.textFields["Wi-Fi Address"]
+        guard field.waitForExistence(timeout: 10) else { throw UIFailure("Wi-Fi address field is missing") }
+        if captureOriginal { originalWifiAddress = field.value as? String }
+        // The editor includes connection help above the endpoint fields.
+        for _ in 0..<8 {
+            if field.isHittable { break }
+            app.swipeUp()
+        }
+        field.tap()
+        let value = field.value as? String ?? ""
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count) + address + "\n")
+        let apply = app.buttons["Test and Apply Address"]
+        if !apply.isHittable { app.swipeUp() }
+        apply.tap()
+        guard app.staticTexts["Address verified and saved."].waitForExistence(timeout: 15) else { throw UIFailure("Address verification failed") }
+        app.navigationBars["Edit Device"].buttons.element(boundBy: 0).tap()
+    }
+
+    private func verifyNetworkFallback(address: String) throws {
+        addressChanged = true // Cleanup restores a possibly applied address.
+        try applyAddress(address, captureOriginal: true)
+        _ = try inspectIdentityAndConnection(selecting: "Automatic")
+        try waitForNativeConnection()
+        try wait("Automatic fallback reason was not shown") {
+            self.app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Using Bluetooth because")).firstMatch.exists
+        }
+        let before = try powerValue(app.switches["Power"])
+        originalPower = before
+        try setPower(!before)
+        try setPower(before)
+        guard let saved = originalWifiAddress, !saved.isEmpty else { throw UIFailure("Original network address was not captured") }
+        try applyAddress(saved)
+        addressChanged = false
+        try wait("Restoring the healthy address did not restore Wi-Fi", timeout: 30) {
+            self.app.staticTexts["Connected via Wi-Fi"].firstMatch.exists
+        }
+        _ = try inspectIdentityAndConnection(selecting: "Bluetooth")
+        try waitForNativeConnection()
+        note("Identity-verified HTTP proxy rejected WebSocket with 503. Automatic fell back to real BLE, completed a power roundtrip, and returned to Wi-Fi after the original address was restored.", name: "Real transport fallback")
+    }
+
     private func waitForNativeConnection() throws {
         try wait("Native BLE controls did not become connected", timeout: 90) {
-            self.app.staticTexts["Connected"].exists && self.app.switches["Power"].exists && self.app.switches["Power"].isEnabled
+            self.app.staticTexts["Connected via Bluetooth"].firstMatch.exists && self.app.switches["Power"].exists && self.app.switches["Power"].isEnabled
         }
     }
 
@@ -289,6 +366,16 @@ final class BleUserInterfaceTests: XCTestCase {
         try launchAtList()
         try openFixtureFromList()
         var failures: [String] = []
+        if addressChanged, let saved = originalWifiAddress {
+            do { try applyAddress(saved); addressChanged = false }
+            catch { failures.append("Original Wi-Fi address could not be restored") }
+        }
+        if app.staticTexts["Disconnected by you"].firstMatch.exists {
+            app.buttons["Connection"].tap()
+            app.buttons["connect-device"].tap()
+            app.buttons["Done"].tap()
+        }
+        _ = try? inspectIdentityAndConnection(selecting: "Bluetooth")
         do {
             try waitForNativeConnection()
             if brightnessChanged, let baseline = originalBrightness {

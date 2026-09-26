@@ -4,6 +4,7 @@ struct BleDeviceDetailView: View {
     @ObservedObject var device: DeviceWithState
     let onSendState: (WledState) -> Void
     let onReconnect: () -> Void
+    @State private var showConnection = false
     @State private var brightness: Double = 128
     @State private var editingBrightness = false
 
@@ -17,14 +18,19 @@ struct BleDeviceDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 Card {
                     HStack {
-                        Label(device.websocketStatus.toString(), systemImage: device.isOnline ? "checkmark.circle" : "antenna.radiowaves.left.and.right")
+                        Label(device.connectionSummary, systemImage: device.isOnline ? "checkmark.circle" : "antenna.radiowaves.left.and.right")
                         Spacer()
                         if device.websocketStatus == .connecting { ProgressView() }
                     }
                     if let error = device.connectionError {
                         Text(error).font(.callout).foregroundStyle(.secondary)
                     }
-                    if !device.isOnline { Button("Reconnect", action: onReconnect).buttonStyle(.bordered) }
+                    Button("Connection") { showConnection = true }.buttonStyle(.bordered)
+                    if let recovery = device.recoveryMessage { Text(recovery).font(.callout).foregroundStyle(.secondary) }
+                    if let command = device.commandMessage { Text(command).font(.caption).foregroundStyle(.secondary) }
+                    if !device.isOnline, let date = device.lastConfirmedAt {
+                        Text("Last confirmed \(date.formatted(date: .omitted, time: .shortened)) — values may have changed.").font(.caption)
+                    }
                 }
                 Card {
                     Toggle("Power", isOn: Binding(
@@ -56,16 +62,26 @@ struct BleDeviceDetailView: View {
                 }
                 .disabled(!device.isOnline)
                 Card {
-                    Text("Paired with iOS").font(.headline)
-                    Text("WLED reconnects automatically when this app is active and the device is nearby.")
-                        .foregroundStyle(.secondary)
+                    NavigationLink("Full web interface") { DeviceWebInterfaceView(device: device) }
+                        .disabled(device.activeTransport != .wifi || !device.isOnline)
+                    if device.activeTransport != .wifi {
+                        Text("Effects, presets and advanced settings in the full web interface require Wi-Fi. Choose Wi-Fi in Connection.").font(.callout).foregroundStyle(.secondary)
+                    }
+                    Text("Power changes the lights, not the connection. iOS manages Bluetooth pairing.").font(.caption).foregroundStyle(.secondary)
                     if let version = device.stateInfo?.info.version { Text("Firmware \(version)").font(.caption) }
                 }
             }
             .padding()
         }
+        .sheet(isPresented: $showConnection) { ConnectionView(device: device) }
         .navigationTitle(device.device.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: device.websocketStatus) { _ in
+            // A lost response may leave the authoritative value unchanged.
+            // Reset the local slider even when that value won't trigger onChange.
+            editingBrightness = false
+            brightness = Double(device.stateInfo?.state.brightness ?? 128)
+        }
         .onAppear { brightness = Double(device.stateInfo?.state.brightness ?? 128) }
         .onChange(of: device.stateInfo?.state.brightness) { value in
             if !editingBrightness, let value { brightness = Double(max(1, value)) }

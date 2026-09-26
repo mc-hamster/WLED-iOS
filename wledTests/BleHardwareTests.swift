@@ -260,6 +260,7 @@ private final class HardwareAPIRun {
     let makeSession: () -> BleBridgeSession
     let http: (String, JSON?) async throws -> JSON
     let identity: (JSON) throws -> Void
+    private var verifiedMAC: String?
     var baseline: JSON?
     var originalState: JSON?
     var target = 0
@@ -323,6 +324,7 @@ private final class HardwareAPIRun {
             throw HardwareFailure("BLE /json lacks state/info")
         }
         try identity(info)
+        verifiedMAC = info["mac"] as? String
         let remote = try await oracle()
         guard let ble = info["ble"] as? JSON, number(ble["protocol"]) == 1,
               let requestLimit = number(ble["maxRequest"]), (256...4096).contains(requestLimit) else {
@@ -394,7 +396,7 @@ private final class HardwareAPIRun {
             throw HardwareFailure("In-memory model lacks Device entity")
         }
         let device = Device(entity: entity, insertInto: persistence.container.viewContext)
-        device.macAddress = "fixture"
+        device.macAddress = try XCTUnwrap(verifiedMAC, "Prepare must verify fixture identity first")
         device.address = ""
         device.connectionType = "ble"
         device.bleIdentifier = identifier.uuidString
@@ -437,7 +439,7 @@ private final class HardwareAPIRun {
             throw HardwareFailure("In-memory model lacks Device entity")
         }
         let device = Device(entity: entity, insertInto: persistence.container.viewContext)
-        device.macAddress = "fixture"
+        device.macAddress = try XCTUnwrap(verifiedMAC, "Prepare must verify fixture identity first")
         device.address = ""
         device.connectionType = "ble"
         device.bleIdentifier = identifier.uuidString

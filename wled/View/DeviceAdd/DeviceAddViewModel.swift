@@ -21,26 +21,7 @@ final class DeviceAddViewModel: ObservableObject {
     let bleDiscoveryService = BleDiscoveryService()
 
     var isAddressValid: Bool {
-        let cleanedAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanedAddress.isEmpty else { return false }
-
-        let addressWithScheme: String
-        if cleanedAddress.lowercased().hasPrefix("http://") || cleanedAddress.lowercased().hasPrefix("https://") {
-            addressWithScheme = cleanedAddress
-        } else {
-            addressWithScheme = "http://\(cleanedAddress)"
-        }
-
-        guard let components = URLComponents(string: addressWithScheme) else {
-            return false
-        }
-
-        // This prevents valid URLs that are empty or just schemes (like "http://")
-        guard let host = components.host, !host.isEmpty else {
-            return false
-        }
-
-        return true
+        (try? validatedDeviceAddress(address)) != nil
     }
 
     var canSubmit: Bool {

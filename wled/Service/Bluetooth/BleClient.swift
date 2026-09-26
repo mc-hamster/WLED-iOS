@@ -4,6 +4,7 @@ import Foundation
 final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
     @Published var deviceState: DeviceWithState
     var onDeviceStateUpdated: ((DeviceStateInfo) -> Void)?
+    private let automaticallyRetries: Bool
     private let session: any BleBridgeConnection
     private var pendingState: WledState?
     private var connectionTask: Task<Void, Never>?
@@ -13,7 +14,8 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
     private var retryCount = 0
     private var manuallyDisconnected = true
 
-    init(device: Device, session: (any BleBridgeConnection)? = nil) {
+    init(device: Device, session: (any BleBridgeConnection)? = nil, automaticallyRetries: Bool = true) {
+        self.automaticallyRetries = automaticallyRetries
         self.deviceState = DeviceWithState(initialDevice: device)
         self.session = session ?? BleBridgeSession(peripheralID: device.bleIdentifierUUID ?? UUID())
         super.init()
@@ -30,6 +32,8 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
         retryTask?.cancel()
         retryTask = nil
         deviceState.connectionError = nil
+        deviceState.requiresUserAction = false
+        deviceState.attemptedTransport = .ble
         deviceState.websocketStatus = .connecting
         let current = generation
         connectionTask = Task { [weak self] in
@@ -41,6 +45,7 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
                 try self.handleBridgeResponse(response)
                 self.retryCount = 0
                 self.connectionTask = nil
+                self.deviceState.activeTransport = .ble
                 self.deviceState.websocketStatus = .connected
                 self.sendPendingStateIfNeeded()
             } catch {
@@ -56,13 +61,21 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
         pendingState = nil
         session.disconnect()
         deviceState.websocketStatus = .disconnected
+        deviceState.activeTransport = nil
+        deviceState.isSending = false
     }
 
     func destroy() { disconnect() }
 
     func sendState(_ state: WledState) {
+        guard deviceState.isOnline, !manuallyDisconnected else {
+            deviceState.commandMessage = "Not sent. Connect before changing the lights."
+            return
+        }
+        deviceState.isSending = true
+        deviceState.commandMessage = "Sending…"
         pendingState = pendingState?.merging(state) ?? state
-        if deviceState.websocketStatus == .connected { sendPendingStateIfNeeded() } else { connect() }
+        sendPendingStateIfNeeded()
     }
 
     private func sendPendingStateIfNeeded() {
@@ -84,6 +97,8 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
                     guard current == self.generation, !Task.isCancelled else { return }
                     try self.handleBridgeResponse(refreshed)
                 }
+                self.deviceState.isSending = false
+                self.deviceState.commandMessage = "State refreshed from WLED"
                 self.stateTask = nil
             } catch {
                 if current == self.generation { self.handleFailure(error) }
@@ -103,6 +118,11 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
 
     private func handlePayload(_ payload: Data) throws {
         let info = try JSONDecoder().decode(DeviceStateInfo.self, from: payload)
+        guard normalizedDeviceMAC(info.info.mac) == normalizedDeviceMAC(deviceState.device.macAddress),
+              !normalizedDeviceMAC(info.info.mac).isEmpty else {
+            throw BleBridgeSession.SessionError.pairingFailed("The connected device has a different identity. Remove it and add the correct device.")
+        }
+        deviceState.lastConfirmedAt = Date()
         deviceState.stateInfo = info
         onDeviceStateUpdated?(info)
     }
@@ -118,12 +138,17 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
 
     private func handleFailure(_ error: Error) {
         guard !manuallyDisconnected else { return }
+        if deviceState.isSending { deviceState.commandMessage = "Change not confirmed. Check the refreshed state before trying again." }
+        deviceState.isSending = false
+        pendingState = nil
         generation += 1
         cancelTasks()
         session.disconnect()
         deviceState.websocketStatus = .disconnected
         deviceState.connectionError = error.localizedDescription
-        if (error as? BleBridgeSession.SessionError)?.requiresUserAction == true { return }
+        deviceState.activeTransport = nil
+        deviceState.requiresUserAction = (error as? BleBridgeSession.SessionError)?.requiresUserAction == true
+        if !automaticallyRetries || deviceState.requiresUserAction { return }
         let delay = min(2.5 * pow(2, Double(min(retryCount, 5))), 60)
         retryCount += 1
         let current = generation

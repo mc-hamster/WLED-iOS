@@ -25,9 +25,10 @@ struct DeviceListView: View {
     // Allow injecting a specific context (defaulting to shared for the actual app)
     init(
         context: NSManagedObjectContext = PersistenceController.shared.container.viewContext,
-        clientFactory: ((Device) -> any DeviceConnectionClient)? = nil
+        clientFactory: ((Device) -> any DeviceConnectionClient)? = nil,
+        sharedViewModel: DeviceWebsocketListViewModel? = nil
     ) {
-        let viewModel = DeviceWebsocketListViewModel(context: context)
+        let viewModel = sharedViewModel ?? DeviceWebsocketListViewModel(context: context)
         if let clientFactory = clientFactory {
             viewModel.makeClient = clientFactory
         }

@@ -19,7 +19,10 @@ class DeviceEditViewModel: ObservableObject {
 
     @Published var device: DeviceWithState
 
-    @Published var connectionType: DeviceConnectionType = .wifi
+    @Published var isVerifyingAddress = false
+    @Published var addressMessage: String?
+    private var addressTask: Task<Void, Never>?
+
     @Published var wifiAddress: String = ""
     @Published var bleName: String = ""
     @Published var bleIdentifier: String = ""
@@ -34,7 +37,6 @@ class DeviceEditViewModel: ObservableObject {
     init(device: DeviceWithState, context: NSManagedObjectContext) {
         self.context = context
         self.device = device
-        connectionType = device.device.preferredConnectionType
         wifiAddress = device.device.wifiAddress
         bleName = device.device.bleName ?? ""
         bleIdentifier = device.device.bleIdentifier ?? ""
@@ -42,8 +44,6 @@ class DeviceEditViewModel: ObservableObject {
         hideDevice = device.device.isHidden
         branch = device.device.branchValue
 
-        setupConnectionTypeListener()
-        setupWifiAddressListener()
         setupCustomNameDebouncedListener()
         setupHideDeviceListener()
         setupBranchListener()
@@ -51,32 +51,6 @@ class DeviceEditViewModel: ObservableObject {
     }
 
     // MARK: - Form change listeners
-
-    private func setupConnectionTypeListener() {
-        $connectionType
-            .removeDuplicates()
-            .sink { [weak self] newConnectionType in
-                guard let self = self else { return }
-                if self.device.device.connectionTypeValue != newConnectionType {
-                    self.device.device.connectionTypeValue = newConnectionType
-                    self.saveDevice()
-                }
-            }
-            .store(in: &cancellables)
-    }
-
-    private func setupWifiAddressListener() {
-        $wifiAddress
-            .debounce(for: .seconds(0.5), scheduler: RunLoop.main)
-            .sink { [weak self] newAddress in
-                guard let self = self else { return }
-                if self.device.device.address != newAddress {
-                    self.device.device.address = newAddress
-                    self.saveDevice()
-                }
-            }
-            .store(in: &cancellables)
-    }
 
     /// Saves the custom name every seconds when there are changes to the value
     private func setupCustomNameDebouncedListener() {
@@ -139,6 +113,32 @@ class DeviceEditViewModel: ObservableObject {
             self?.objectWillChange.send()
         }
     }
+
+    func applyWifiAddress() {
+        guard !isVerifyingAddress else { return }
+        isVerifyingAddress = true
+        addressMessage = nil
+        let draft = wifiAddress
+        let expectedMAC = device.device.macAddress
+        addressTask = Task {
+            defer { isVerifyingAddress = false; addressTask = nil }
+            do {
+                let address = try validatedDeviceAddress(draft)
+                let info = try await DeviceFirstContactService().fetchDeviceInfo(address: address)
+                try Task.checkCancellation()
+                guard normalizedDeviceMAC(info.mac) == normalizedDeviceMAC(expectedMAC), !normalizedDeviceMAC(info.mac).isEmpty else {
+                    throw DeviceAddressError.differentDevice
+                }
+                device.device.address = address
+                try context.save()
+                wifiAddress = address
+                addressMessage = "Address verified and saved."
+            } catch is CancellationError { addressMessage = "Address check canceled. Saved address unchanged." }
+            catch { addressMessage = error.localizedDescription }
+        }
+    }
+
+    func cancelAddressVerification() { addressTask?.cancel() }
 
     func checkForUpdate() async {
         isCheckingForUpdates = true

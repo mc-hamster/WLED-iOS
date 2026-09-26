@@ -5,6 +5,7 @@ struct WLEDNativeApp: App {
     static let dateLastUpdateKey = "lastUpdateReleasesDate"
     
     let persistenceController = PersistenceController.shared
+    @StateObject private var connections = DeviceWebsocketListViewModel(context: PersistenceController.shared.container.viewContext)
 
     private var isolatesHostedTests: Bool {
         #if DEBUG
@@ -22,7 +23,7 @@ struct WLEDNativeApp: App {
                 // hardware suite separately opts in before owning the BLE peer.
                 ProgressView("Running automated tests")
             } else {
-                DeviceListView()
+                DeviceListView(sharedViewModel: connections)
                     .environment(\.managedObjectContext, persistenceController.container.viewContext)
                     .onAppear {
                         refreshVersionsSync()

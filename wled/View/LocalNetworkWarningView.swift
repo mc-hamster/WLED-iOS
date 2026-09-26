@@ -22,11 +22,11 @@ struct LocalNetworkWarningView: View {
 
             VStack(alignment: .leading, spacing: 6) {
 
-                Text("Local Network Access Required")
+                Text("Wi-Fi Access Needs Permission")
                     .font(.headline)
                     .foregroundStyle(.primary)
 
-                Text("local_network_warning_body")
+                Text("Allow Local Network access to find and control WLED over Wi-Fi. Bluetooth controls can still work without this permission.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

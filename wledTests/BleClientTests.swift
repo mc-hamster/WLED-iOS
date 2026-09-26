@@ -54,6 +54,33 @@ struct BleClientTests {
         client.destroy()
     }
 
+    @Test func offlineCommandsAreNotQueuedForLater() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let session = TestBleConnection()
+        let client = BleClient(device: device(in: persistence), session: session)
+        client.sendState(WledState(brightness: 17))
+        #expect(session.connections == 0)
+        #expect(client.deviceState.commandMessage?.hasPrefix("Not sent") == true)
+        client.connect()
+        while client.deviceState.websocketStatus != .connected { await Task.yield() }
+        #expect(session.requests.allSatisfy { $0.0 == "GET" })
+        client.destroy()
+    }
+
+    @Test func wrongIdentityNeverEnablesControls() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let session = TestBleConnection()
+        let saved = device(in: persistence)
+        saved.macAddress = "112233445566"
+        let client = BleClient(device: saved, session: session)
+        client.connect()
+        while client.deviceState.connectionError == nil { await Task.yield() }
+        #expect(client.deviceState.websocketStatus == .disconnected)
+        #expect(client.deviceState.stateInfo == nil)
+        #expect(client.deviceState.requiresUserAction)
+        client.destroy()
+    }
+
     @Test func lateReplyCannotResurrectDestroyedClient() async {
         let persistence = PersistenceController(inMemory: true)
         let session = TestBleConnection()

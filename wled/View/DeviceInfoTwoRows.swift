@@ -25,32 +25,9 @@ struct DeviceInfoTwoRows: View {
             }
             HStack(spacing: 4) {
                 WebsocketStatusIndicator(currentStatus: device.websocketStatus)
-                Text(device.device.supportsNativeBleControl ? "Bluetooth" : device.device.wifiAddress)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .lineSpacing(0)
-                if !device.device.supportsNativeBleControl {
-                let signalStrength = Int(device.stateInfo?.info.wifi.signal ?? 0)
-                Label {
-                    Text(
-                        device.isOnline ? "Signal Strength: \(signalStrength)" : "Offline"
-                    )
-                } icon: {
-                    getSignalIcon(
-                        isOnline: device.isOnline,
-                        signalStrength: signalStrength
-                    )
-                }
-                .labelStyle(.iconOnly)
-                }
-                if !device.isOnline {
-                    OfflineSinceText(device: device)
-                        .lineLimit(1)
-                        .allowsTightening(true)
-                        .foregroundStyle(.secondary)
-                        .lineSpacing(0)
-                        .minimumScaleFactor(0.6)
-                }
+                Text(device.connectionSummary)
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
                 if device.device.isHidden {
                     HStack(spacing: 3) {
                         Image(systemName: "eye.slash")

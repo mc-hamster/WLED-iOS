@@ -1,252 +1,160 @@
 import Foundation
 import CoreData
-import Combine
 
 @MainActor
 class WebsocketClient: NSObject, ObservableObject, URLSessionWebSocketDelegate, DeviceConnectionClient {
-    
-    // MARK: - Properties
-    
-    // The state holder visible to the UI
     @Published var deviceState: DeviceWithState
-
-    private var webSocketTask: URLSessionWebSocketTask?
+    var onDeviceStateUpdated: ((DeviceStateInfo) -> Void)?
+    private var socket: URLSessionWebSocketTask?
     nonisolated let urlSession: URLSession
     private let delegateProxy: WeakSessionDelegate
-
-    // State flags
-    private var isManuallyDisconnected = false
-    private var isConnecting = false
+    private let automaticallyRetries: Bool
+    private var manuallyDisconnected = true
+    private var generation = 0
     private var retryCount = 0
-    
-    // Constants
-    private let tag = "WebsocketClient"
-    private let reconnectionDelay: TimeInterval = 2.5
-    private let maxReconnectionDelay: TimeInterval = 60.0
-    
-    // Coders
-    private let decoder = JSONDecoder()
-    private let encoder = JSONEncoder()
+    private var retryTask: Task<Void, Never>?
+    private var receiveTask: Task<Void, Never>?
+    private var healthTask: Task<Void, Never>?
+    private var commandTimer: Task<Void, Never>?
 
-    var onDeviceStateUpdated: ((DeviceStateInfo) -> Void)?
-
-    // MARK: - Initialization
-    
-    init(device: Device) {
-        self.deviceState = DeviceWithState(initialDevice: device)
-
+    init(device: Device, automaticallyRetries: Bool = true) {
+        deviceState = DeviceWithState(initialDevice: device)
+        self.automaticallyRetries = automaticallyRetries
         let proxy = WeakSessionDelegate()
-        self.delegateProxy = proxy
+        delegateProxy = proxy
         let configuration = URLSessionConfiguration.default
-        configuration.timeoutIntervalForRequest = 15.0
-        configuration.timeoutIntervalForResource = 30.0
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 30
         configuration.waitsForConnectivity = false
-        self.urlSession = URLSession(
-            configuration: configuration,
-            delegate: proxy,
-            delegateQueue: OperationQueue.main
-        )
-
+        urlSession = URLSession(configuration: configuration, delegate: proxy, delegateQueue: .main)
         super.init()
-
-        // Now that 'self' is fully initialized, connect the delegate
-        self.delegateProxy.delegate = self
+        proxy.delegate = self
     }
 
-    // MARK: - Connection Logic
-    
     func connect() {
-        if webSocketTask != nil || isConnecting {
-            print("\(tag): Already connected or connecting to \(deviceState.device.address ?? "nil")")
-            return
-        }
-        
-        guard let address = deviceState.device.address, !address.isEmpty else {
-            print("\(tag): Device address is empty")
-            return
-        }
-        
-        isManuallyDisconnected = false
-        isConnecting = true
-        
-        DispatchQueue.main.async {
-            self.deviceState.websocketStatus = .connecting
-        }
-        
-        let urlString = "ws://\(address)/ws"
-        guard let url = URL(string: urlString) else {
-            print("\(tag): Invalid URL \(urlString)")
-            return
-        }
-        
-        print("\(tag): Connecting to \(address)")
-        let request = URLRequest(url: url, timeoutInterval: 10)
-
-        webSocketTask = urlSession.webSocketTask(with: request)
-        webSocketTask?.resume()
-        
-        // Start listening for messages
-        listen()
-    }
-    
-    func disconnect() {
-        print("\(tag): Manually disconnecting from \(deviceState.device.address ?? "")")
-        isManuallyDisconnected = true
-        
-        webSocketTask?.cancel(with: .normalClosure, reason: Data("Client disconnected".utf8))
-        webSocketTask = nil
-        
-        DispatchQueue.main.async {
-            self.deviceState.websocketStatus = .disconnected
-            self.isConnecting = false
-        }
-    }
-    
-    private func reconnect() {
-        if isManuallyDisconnected || isConnecting { return }
-        
-        let delayTime = min(reconnectionDelay * pow(2.0, Double(retryCount)), maxReconnectionDelay)
-        print("\(tag): Reconnecting to \(deviceState.device.address ?? "") in \(delayTime)s")
-        
-        Task {
-            try await Task.sleep(for: .seconds(delayTime))
-            if !isManuallyDisconnected && !isConnecting {
-                self.retryCount += 1
-                self.connect()
-            }
-        }
-    }
-    
-    // MARK: - Message Handling
-    
-    private func listen() {
-        webSocketTask?.receive { [weak self] result in
-            Task {
-                guard let self = self else { return }
-
-                switch result {
-                case .failure(let error):
-                    await self.handleFailure(error)
-                case .success(let message):
-                    switch message {
-                    case .string(let text):
-                        await self.handleMessage(text)
-                    case .data(let data):
-                        // WLED mostly sends text, but good to handle data
-                        if let text = String(data: data, encoding: .utf8) {
-                            await self.handleMessage(text)
-                        }
-                    @unknown default:
-                        break
-                    }
-
-                    // Recursively listen for the next message
-                    await self.listen()
+        guard socket == nil else { return }
+        manuallyDisconnected = false
+        deviceState.connectionError = nil
+        deviceState.requiresUserAction = false
+        deviceState.attemptedTransport = .wifi
+        let address: String
+        do { address = try validatedDeviceAddress(deviceState.device.wifiAddress) }
+        catch { fail(error.localizedDescription, requiresAction: true); return }
+        guard let url = URL(string: "ws://\(address)/ws") else { return }
+        retryTask?.cancel(); retryTask = nil
+        deviceState.websocketStatus = .connecting
+        let task = urlSession.webSocketTask(with: URLRequest(url: url, timeoutInterval: 10))
+        socket = task
+        let current = generation
+        task.resume()
+        healthTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                guard let self, self.generation == current else { return }
+                guard self.deviceState.isOnline, !self.deviceState.isSending else { continue }
+                if let last = self.deviceState.lastConfirmedAt, Date().timeIntervalSince(last) > 25 {
+                    self.fail("Wi-Fi stopped responding. Reconnecting to refresh WLED.")
+                    return
                 }
+                // WLED supports an application-level state read; this does not change lights.
+                do { try await task.send(.string(#"{"v":true}"#)) }
+                catch { self.fail("Wi-Fi stopped responding: \(error.localizedDescription)"); return }
             }
         }
-    }
-    
-    private func handleMessage(_ text: String) {
-        let decoder = self.decoder
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self = self else { return }
-            guard let data = text.data(using: .utf8) else { return }
-
+        receiveTask = Task { [weak self] in
             do {
-                let info = try decoder.decode(DeviceStateInfo.self, from: data)
-                await MainActor.run {
+                while !Task.isCancelled {
+                    let message = try await task.receive()
+                    guard let self, self.generation == current else { return }
+                    let data: Data
+                    switch message {
+                    case .data(let bytes): data = bytes
+                    case .string(let text): data = Data(text.utf8)
+                    @unknown default: continue
+                    }
+                    // Success envelopes aren't state; wait for authoritative data.
+                    guard let info = try? JSONDecoder().decode(DeviceStateInfo.self, from: data) else { continue }
+                    guard !normalizedDeviceMAC(info.info.mac).isEmpty,
+                          normalizedDeviceMAC(info.info.mac) == normalizedDeviceMAC(self.deviceState.device.macAddress) else {
+                        self.fail("This network address belongs to a different device. Check the address in Edit Device.", requiresAction: true)
+                        return
+                    }
                     self.deviceState.stateInfo = info
-
-                    // If we get a message, we are connected (fallback if onOpen didn't fire)
-                    if self.isConnecting {
-                        self.deviceState.websocketStatus = .connected
-                        self.isConnecting = false
+                    self.deviceState.lastConfirmedAt = Date()
+                    self.deviceState.activeTransport = .wifi
+                    self.deviceState.websocketStatus = .connected
+                    self.retryCount = 0
+                    if self.deviceState.isSending {
+                        self.deviceState.isSending = false
+                        self.deviceState.commandMessage = "State refreshed from WLED"
+                        self.commandTimer?.cancel()
                     }
                     self.onDeviceStateUpdated?(info)
                 }
             } catch {
-                print("Failed to parse JSON: \(error)")
+                guard let self, self.generation == current, !self.manuallyDisconnected else { return }
+                self.fail("Wi-Fi connection unavailable. Check WLED's power, address and Local Network permission. \(error.localizedDescription)")
             }
         }
     }
-    
-    private func handleFailure(_ error: Error) {
-        print("\(tag): WebSocket failure: \(error)")
-        webSocketTask = nil
-        
-        DispatchQueue.main.async {
-            self.deviceState.websocketStatus = .disconnected
-            self.isConnecting = false
-            self.reconnect()
+
+    func disconnect() {
+        manuallyDisconnected = true
+        generation += 1
+        retryTask?.cancel(); retryTask = nil
+        receiveTask?.cancel(); receiveTask = nil
+        commandTimer?.cancel(); commandTimer = nil
+        healthTask?.cancel(); healthTask = nil
+        socket?.cancel(with: .normalClosure, reason: nil); socket = nil
+        deviceState.websocketStatus = .disconnected
+        deviceState.activeTransport = nil
+        deviceState.isSending = false
+    }
+
+    private func fail(_ message: String, requiresAction: Bool = false) {
+        if deviceState.isSending { deviceState.commandMessage = "Change not confirmed. Check the refreshed state before trying again." }
+        disconnect()
+        manuallyDisconnected = false
+        deviceState.connectionError = message
+        deviceState.requiresUserAction = requiresAction
+        guard automaticallyRetries, !requiresAction else { return }
+        let delay = min(2.5 * pow(2, Double(min(retryCount, 5))), 60)
+        retryCount += 1
+        let current = generation
+        retryTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+            guard let self, self.generation == current, !self.manuallyDisconnected else { return }
+            self.connect()
         }
     }
-    
-    // MARK: - Sending
-    
-    /// Sends a State object to the device.
-    /// Note: Kotlin code used `State` class. In Swift, assuming `WLEDStateChange` or `WledState` is the equivalent Encodable struct.
+
     func sendState(_ state: WledState) {
-        if deviceState.websocketStatus != .connected {
-            print("\(tag): Not connected to \(deviceState.device.address ?? ""), reconnecting...")
-            connect()
+        guard deviceState.isOnline, !manuallyDisconnected, let socket else {
+            deviceState.commandMessage = "Not sent. Connect before changing the lights."
+            return
         }
-        
         do {
-            let data = try encoder.encode(state)
-            if let jsonString = String(data: data, encoding: .utf8) {
-                print("\(tag): Sending message: \(jsonString)")
-                let message = URLSessionWebSocketTask.Message.string(jsonString)
-                
-                webSocketTask?.send(message) { error in
-                    if let error = error {
-                        Task {
-                            print("\(self.tag): Failed to send message: \(error)")
-                            await self.handleFailure(error)
-                        }
-                    }
+            let data = try JSONEncoder().encode(state)
+            deviceState.isSending = true
+            deviceState.commandMessage = "Sending…"
+            let current = generation
+            socket.send(.string(String(decoding: data, as: UTF8.self))) { [weak self] error in
+                Task { @MainActor [weak self] in
+                    guard let self, self.generation == current, let error else { return }
+                    self.fail("Change not confirmed: \(error.localizedDescription)")
                 }
             }
-        } catch {
-            print("\(tag): Failed to encode state: \(error)")
-        }
-    }
-
-    func destroy() {
-        print("\(tag): Websocket client destroyed")
-        disconnect()
-        urlSession.invalidateAndCancel()
-    }
-
-    deinit {
-        print("WebsocketClient deinit")
-        urlSession.invalidateAndCancel()
-    }
-
-    // MARK: - URLSessionWebSocketDelegate
-    
-    nonisolated func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
-        // Jump to MainActor to update state
-        Task { @MainActor in
-            print("\(self.tag): WebSocket connected")
-            self.deviceState.websocketStatus = .connected
-            self.retryCount = 0
-            self.isConnecting = false
-        }
-    }
-
-    nonisolated func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        Task { @MainActor in
-            let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "No reason"
-            print("\(self.tag): WebSocket closing. Code: \(closeCode), reason: \(reasonString)")
-
-            self.deviceState.websocketStatus = .disconnected
-
-            if closeCode != .normalClosure && !self.isManuallyDisconnected {
-                self.reconnect()
+            commandTimer?.cancel()
+            commandTimer = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                guard let self, self.generation == current, self.deviceState.isSending else { return }
+                self.fail("WLED did not confirm the change. Reconnect to read its current state.")
             }
-        }
+        } catch { deviceState.commandMessage = "Not sent: \(error.localizedDescription)" }
     }
+
+    func destroy() { disconnect(); urlSession.invalidateAndCancel() }
+    deinit { urlSession.invalidateAndCancel() }
 }
 
 // MARK: - WeakSessionDelegate
