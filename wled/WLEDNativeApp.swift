@@ -5,14 +5,29 @@ struct WLEDNativeApp: App {
     static let dateLastUpdateKey = "lastUpdateReleasesDate"
     
     let persistenceController = PersistenceController.shared
+
+    private var isolatesHostedTests: Bool {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        return environment["BLE_HIL"] == "1" || environment["BLE_HIL_ISOLATE_APP"] == "1"
+        #else
+        return false
+        #endif
+    }
     
     var body: some Scene {
         WindowGroup {
-            DeviceListView()
-                .environment(\.managedObjectContext, persistenceController.container.viewContext)
-                .onAppear {
-                    refreshVersionsSync()
-                }
+            if isolatesHostedTests {
+                // Hosted unit tests must not connect saved devices either. The
+                // hardware suite separately opts in before owning the BLE peer.
+                ProgressView("Running automated tests")
+            } else {
+                DeviceListView()
+                    .environment(\.managedObjectContext, persistenceController.container.viewContext)
+                    .onAppear {
+                        refreshVersionsSync()
+                    }
+            }
         }
     }
     

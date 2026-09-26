@@ -23,6 +23,13 @@
 			remoteGlobalIDString = C9A9E5BC2918D1C3005B5C22;
 			remoteInfo = WLED;
 		};
+		BBE210000000000000000007 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C9A9E5B52918D1C3005B5C22;
+			proxyType = 1;
+			remoteGlobalIDString = C9A9E5BC2918D1C3005B5C22;
+			remoteInfo = WLED;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +39,13 @@
 		884FA90B2F027B6100097D56 /* wled_native_data.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = wled_native_data.xcdatamodel; sourceTree = "<group>"; };
 		C9A9E5BD2918D1C3005B5C22 /* WLED.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WLED.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C9C4B47E2AC0050500791D20 /* README.md */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = SOURCE_ROOT; };
+		BBE210000000000000000002 /* WLEDUIHILTests.xctest */ = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.cfbundle;
+			includeInIndex = 0;
+			path = WLEDUIHILTests.xctest;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -47,6 +61,13 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		8813CE002EE9178D00B0A987 /* wled */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (8813CE392EE9178D00B0A987 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = wled; sourceTree = "<group>"; };
 		882CC9142F05CFE00080567C /* wledTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = wledTests; sourceTree = "<group>"; };
+		BBE210000000000000000003 /* wledUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			explicitFileTypes = {};
+			explicitFolders = ();
+			path = wledUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -68,6 +89,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BBE210000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -86,6 +113,7 @@
 				C9C4B47E2AC0050500791D20 /* README.md */,
 				8813CE002EE9178D00B0A987 /* wled */,
 				882CC9142F05CFE00080567C /* wledTests */,
+				BBE210000000000000000003 /* wledUITests */,
 				C9A9E5BE2918D1C3005B5C22 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -95,6 +123,7 @@
 			children = (
 				C9A9E5BD2918D1C3005B5C22 /* WLED.app */,
 				882CC9132F05CFE00080567C /* WLEDTests.xctest */,
+				BBE210000000000000000002 /* WLEDUIHILTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -152,6 +181,19 @@
 			productReference = C9A9E5BD2918D1C3005B5C22 /* WLED.app */;
 			productType = "com.apple.product-type.application";
 		};
+		BBE210000000000000000001 /* WLEDUIHILTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BBE21000000000000000000B;
+			buildPhases = (BBE210000000000000000004, BBE210000000000000000005, BBE210000000000000000006,);
+			buildRules = ();
+			dependencies = (BBE210000000000000000008,);
+			fileSystemSynchronizedGroups = (BBE210000000000000000003,);
+			name = WLEDUIHILTests;
+			packageProductDependencies = ();
+			productName = WLEDUIHILTests;
+			productReference = BBE210000000000000000002;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -162,6 +204,7 @@
 				LastSwiftUpdateCheck = 2620;
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
+					BBE210000000000000000001 = { CreatedOnToolsVersion = 27.0; TestTargetID = C9A9E5BC2918D1C3005B5C22; };
 					882CC9122F05CFE00080567C = {
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = C9A9E5BC2918D1C3005B5C22;
@@ -192,6 +235,7 @@
 			targets = (
 				C9A9E5BC2918D1C3005B5C22 /* WLED */,
 				882CC9122F05CFE00080567C /* WLEDTests */,
+				BBE210000000000000000001 /* WLEDUIHILTests */,
 			);
 		};
 /* End PBXProject section */
@@ -212,6 +256,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BBE210000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -230,6 +280,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BBE210000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -241,6 +297,11 @@
 		8849FA232F710B1B008ACEC3 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			productRef = 8849FA222F710B1B008ACEC3 /* SwiftLintBuildToolPlugin */;
+		};
+		BBE210000000000000000008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C9A9E5BC2918D1C3005B5C22;
+			targetProxy = BBE210000000000000000007;
 		};
 /* End PBXTargetDependency section */
 
@@ -484,6 +545,42 @@
 			};
 			name = Release;
 		};
+		BBE210000000000000000009 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8RN882MNR5;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "ca.cgagnier.wled-native.WLEDUIHILTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = WLED;
+			};
+			name = Debug;
+		};
+		BBE21000000000000000000A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8RN882MNR5;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "ca.cgagnier.wled-native.WLEDUIHILTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = WLED;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -511,6 +608,12 @@
 				C9A9E5D22918D1C4005B5C22 /* Debug */,
 				C9A9E5D32918D1C4005B5C22 /* Release */,
 			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BBE21000000000000000000B /* Build configuration list for PBXNativeTarget "WLEDUIHILTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (BBE210000000000000000009, BBE21000000000000000000A,);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};

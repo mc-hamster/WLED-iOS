@@ -146,6 +146,61 @@ extension WledState {
                   nightlight: newer.nightlight ?? nightlight,
                   liveDataOverride: newer.liveDataOverride ?? liveDataOverride,
                   mainSegment: newer.mainSegment ?? mainSegment,
-                  segment: newer.segment ?? segment)
+                  segment: mergingSegments(newer.segment))
+    }
+
+    private func mergingSegments(_ newer: [Segment]?) -> [Segment]? {
+        guard let newer else { return segment }
+        guard let older = segment else { return newer }
+        let olderIDs = older.compactMap(\.id)
+        let newerIDs = newer.compactMap(\.id)
+        // Missing IDs use array positions in WLED. Repeated IDs can be ordered
+        // operations. Keep those arrays intact instead of inventing targets or
+        // changing their order. Geometry commands also remain intact: an old
+        // stop could shadow a newer len. Native controls use explicit IDs and
+        // do not change segment geometry.
+        guard olderIDs.count == older.count, newerIDs.count == newer.count,
+              Set(olderIDs).count == older.count, Set(newerIDs).count == newer.count,
+              !older.contains(where: { $0.changesGeometry }),
+              !newer.contains(where: { $0.changesGeometry }) else { return newer }
+        var combined = older
+        for update in newer {
+            if let index = combined.firstIndex(where: { $0.id == update.id }) {
+                combined[index] = combined[index].mergingControlFields(update)
+            } else {
+                combined.append(update)
+            }
+        }
+        return combined
+    }
+}
+
+private extension Segment {
+    var changesGeometry: Bool {
+        start != nil || stop != nil || length != nil || grouping != nil || spacing != nil
+    }
+
+    func mergingControlFields(_ newer: Segment) -> Segment {
+        Segment(id: newer.id ?? id,
+                start: newer.start ?? start, stop: newer.stop ?? stop,
+                length: newer.length ?? length, grouping: newer.grouping ?? grouping,
+                spacing: newer.spacing ?? spacing, isOn: newer.isOn ?? isOn,
+                brightness: newer.brightness ?? brightness, colors: mergingColorSlots(newer.colors),
+                effect: newer.effect ?? effect, effectSpeed: newer.effectSpeed ?? effectSpeed,
+                effectInt64ensity: newer.effectInt64ensity ?? effectInt64ensity,
+                palette: newer.palette ?? palette, isSelected: newer.isSelected ?? isSelected,
+                isReversed: newer.isReversed ?? isReversed, isMirrored: newer.isMirrored ?? isMirrored)
+    }
+
+    func mergingColorSlots(_ newer: [[Int64]]?) -> [[Int64]]? {
+        guard let newer else { return colors }
+        guard var combined = colors else { return newer }
+        // Empty/missing color slots leave their previous value unchanged. A
+        // supplied RGB/RGBW array replaces the whole slot, including white.
+        for (index, color) in newer.enumerated() where !color.isEmpty {
+            while combined.count <= index { combined.append([]) }
+            combined[index] = color
+        }
+        return combined
     }
 }

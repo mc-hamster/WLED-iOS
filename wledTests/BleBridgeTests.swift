@@ -12,8 +12,11 @@ private final class TestBleTransport: BleTransport {
     var autoReady = true
     var acknowledgeWrites = true
     var responseBeforeWriteAck = false
+    var duplicateResponseBeforeWriteAck = false
     var respond = true
     var writeLength = 20
+    var responseBody = "{\"success\":true}"
+    var disconnectAfterResponse = false
     private var assembler = BleFrameAssembler()
 
     func start() {
@@ -24,12 +27,18 @@ private final class TestBleTransport: BleTransport {
     func write(_ data: Data) {
         writes.append(data)
         let complete = (try? assembler.append(data)) != nil
-        if complete && respond && responseBeforeWriteAck { sendResponse() }
+        if complete && respond && responseBeforeWriteAck {
+            sendResponse()
+            if duplicateResponseBeforeWriteAck { sendResponse() }
+        }
         if acknowledgeWrites { onEvent?(.writeCompleted(nil)) }
-        if complete && respond && !responseBeforeWriteAck { sendResponse() }
+        if complete && respond && !responseBeforeWriteAck {
+            sendResponse()
+            if disconnectAfterResponse { onEvent?(.failed(BleBridgeSession.SessionError.disconnected)) }
+        }
     }
     func sendResponse() {
-        let payload = Data("200 application/json\n\n{\"success\":true}".utf8)
+        let payload = Data("200 application/json\n\n\(responseBody)".utf8)
         for chunk in try! BleBridgeCodec.chunks(payload, maximumWriteLength: writeLength) {
             onEvent?(.response(chunk))
         }
@@ -39,6 +48,60 @@ private final class TestBleTransport: BleTransport {
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct BleBridgeTests {
+    @Test func retiredResponseCannotInstallCapabilitiesOnNextConnection() async throws {
+        let transport = TestBleTransport()
+        let session = BleBridgeSession(transport: transport)
+        transport.responseBody = #"{"ble":{"protocol":1,"maxRequest":256,"security":"passkey"}}"#
+        transport.disconnectAfterResponse = true
+        do {
+            _ = try await session.request(method: "GET", path: "/json/info")
+            Issue.record("Retired response was accepted")
+        } catch BleBridgeSession.SessionError.disconnected { } catch { Issue.record("Unexpected failure: \(error)") }
+        #expect(session.maximumRequestBytes == 4096)
+        transport.disconnectAfterResponse = false
+        transport.responseBody = #"{"ble":{"protocol":1,"maxRequest":512,"security":"passkey"}}"#
+        _ = try await session.request(method: "GET", path: "/json/info")
+        #expect(session.maximumRequestBytes == 512)
+        session.disconnect()
+    }
+
+    @Test func advertisedRequestLimitRejectsOversizeWithoutRetiringHealthyConnection() async throws {
+        let transport = TestBleTransport()
+        let session = BleBridgeSession(transport: transport)
+        transport.responseBody = #"{"info":{"ble":{"protocol":1,"maxRequest":256,"security":"passkey"}}}"#
+        _ = try await session.request(method: "GET", path: "/json")
+        #expect(session.maximumRequestBytes == 256)
+        transport.responseBody = #"{"success":true}"#
+        let prefixBytes = Data("POST /json/state\n\n".utf8).count
+        _ = try await session.request(method: "POST", path: "/json/state", body: String(repeating: "x", count: 256 - prefixBytes))
+        let writes = transport.writes.count
+        do {
+            _ = try await session.request(method: "POST", path: "/json/state", body: String(repeating: "x", count: 257 - prefixBytes))
+            Issue.record("257-byte request exceeded the advertised 256-byte limit")
+        } catch BleBridgeSession.SessionError.requestTooLarge { } catch { Issue.record("Unexpected failure: \(error)") }
+        #expect(transport.writes.count == writes)
+        #expect(transport.stopCount == 0)
+        #expect(try await session.request(method: "GET", path: "/json/state").status == 200)
+        session.disconnect()
+        #expect(session.maximumRequestBytes == 4096)
+        transport.responseBody = #"{"ble":{"protocol":1,"maxRequest":512,"security":"passkey"}}"#
+        _ = try await session.request(method: "GET", path: "/json/info")
+        #expect(session.maximumRequestBytes == 512)
+        session.disconnect()
+    }
+
+    @Test(arguments: [255, 4097])
+    func invalidAdvertisedRequestLimitsRetireConnection(_ limit: Int) async {
+        let transport = TestBleTransport()
+        let session = BleBridgeSession(transport: transport)
+        transport.responseBody = "{\"ble\":{\"protocol\":1,\"maxRequest\":\(limit),\"security\":\"passkey\"}}"
+        do {
+            _ = try await session.request(method: "GET", path: "/json/info")
+            Issue.record("Invalid capabilities accepted")
+        } catch BleBridgeSession.SessionError.invalidResponse { } catch { Issue.record("Unexpected failure: \(error)") }
+        #expect(transport.stopCount == 1)
+    }
+
     @Test func oversizedRequestsNeverStartPairing() async {
         let transport = TestBleTransport()
         let session = BleBridgeSession(transport: transport)
@@ -113,6 +176,52 @@ struct BleBridgeTests {
         transport.responseBeforeWriteAck = true
         let session = BleBridgeSession(transport: transport)
         for _ in 0..<4 { #expect(try await session.request(method: "GET", path: "/json").status == 200) }
+        session.disconnect()
+    }
+
+    @Test func unsolicitedResponseRetiresIdleConnectionBeforeRetry() async throws {
+        let transport = TestBleTransport()
+        let session = BleBridgeSession(transport: transport)
+        var disconnects = 0
+        session.onDisconnect = { _ in disconnects += 1 }
+        try await session.connect()
+        transport.sendResponse()
+        #expect(transport.stopCount == 1)
+        #expect(disconnects == 1)
+        // Remaining chunks from the retired connection cannot start a frame.
+        transport.onEvent?(.response(Data([1, 0, 42])))
+        #expect(transport.stopCount == 1)
+        #expect(try await session.request(method: "GET", path: "/json").status == 200)
+        #expect(transport.startCount == 2)
+        session.disconnect()
+    }
+
+    @Test func duplicateResponseBeforeFinalWriteAckFailsInsteadOfReplacingReply() async throws {
+        let transport = TestBleTransport()
+        transport.responseBeforeWriteAck = true
+        transport.duplicateResponseBeforeWriteAck = true
+        let session = BleBridgeSession(transport: transport)
+        do {
+            _ = try await session.request(method: "GET", path: "/json")
+            Issue.record("Duplicate response was accepted")
+        } catch BleBridgeSession.SessionError.invalidResponse {
+            // The first response is valid but cannot be released before its write ACK.
+        } catch { Issue.record("Unexpected failure: \(error)") }
+        #expect(transport.stopCount == 1)
+        transport.duplicateResponseBeforeWriteAck = false
+        #expect(try await session.request(method: "GET", path: "/json").status == 200)
+        #expect(transport.startCount == 2)
+        session.disconnect()
+    }
+
+    @Test func lateResponseAfterCompletedRequestRetiresConnection() async throws {
+        let transport = TestBleTransport()
+        let session = BleBridgeSession(transport: transport)
+        #expect(try await session.request(method: "GET", path: "/json").status == 200)
+        transport.sendResponse()
+        #expect(transport.stopCount == 1)
+        #expect(try await session.request(method: "GET", path: "/json").status == 200)
+        #expect(transport.startCount == 2)
         session.disconnect()
     }
 
@@ -197,6 +306,52 @@ struct BleBridgeTests {
         _ = try await session.request(method: "GET", path: "/json")
         for chunk in chunks.dropFirst() { transport.onEvent?(.live(chunk)) }
         #expect(received == payload)
+        session.disconnect()
+    }
+
+    @Test func stalledLiveFrameFailsWhileCommandTrafficStillWorks() async throws {
+        let transport = TestBleTransport()
+        let session = BleBridgeSession(transport: transport, liveFrameTimeout: .milliseconds(40))
+        var liveTimeout = false
+        session.onDisconnect = { error in
+            if case BleBridgeSession.SessionError.liveFrameTimedOut = error { liveTimeout = true }
+        }
+        try await session.connect()
+        transport.onEvent?(.live(Data([10, 0, 1])))
+        #expect(try await session.request(method: "GET", path: "/json").status == 200)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(liveTimeout)
+        #expect(transport.stopCount == 1)
+        #expect(try await session.request(method: "GET", path: "/json").status == 200)
+        #expect(transport.startCount == 2)
+        session.disconnect()
+    }
+
+    @Test func completedLiveFrameCancelsFragmentDeadline() async throws {
+        let transport = TestBleTransport()
+        let session = BleBridgeSession(transport: transport, liveFrameTimeout: .milliseconds(40))
+        var received: Data?
+        session.onLivePayload = { received = $0 }
+        try await session.connect()
+        transport.onEvent?(.live(Data([3, 0, 1])))
+        transport.onEvent?(.live(Data([2, 3])))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(received == Data([1, 2, 3]))
+        #expect(transport.stopCount == 0)
+        session.disconnect()
+    }
+
+    @Test func disconnectCancelsLiveDeadlineBeforeNextConnection() async throws {
+        let transport = TestBleTransport()
+        let session = BleBridgeSession(transport: transport, liveFrameTimeout: .milliseconds(40))
+        try await session.connect()
+        transport.onEvent?(.live(Data([10, 0, 1])))
+        session.disconnect()
+        try await session.connect()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(transport.stopCount == 1)
+        #expect(transport.startCount == 2)
+        #expect(try await session.request(method: "GET", path: "/json").status == 200)
         session.disconnect()
     }
 

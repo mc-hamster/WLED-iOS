@@ -33,6 +33,8 @@ struct BleFrameAssembler {
     private var expected: Int?
     private var buffer = Data()
 
+    var progressDescription: String { "\(buffer.count)/\(expected.map(String.init) ?? "none")" }
+
     mutating func reset() {
         expected = nil
         buffer.removeAll(keepingCapacity: true)

@@ -9,7 +9,7 @@ Use this app's `ble` branch with the `ble_api_bridge` usermod from [mc-hamster/W
 3. Tap **Add**. Accept the system pairing prompt and enter the firmware's code when iOS asks.
 4. Tap **Done**, open the light, and use power, brightness, and color controls.
 
-The firmware generates a persistent per-device code; it no longer universally uses `123456`. iOS manages the bond. The app does not need or store your code. It waits for encrypted service readiness before sending commands, allowing up to 90 seconds for discovery/pairing. Normal commands have a separate 30-second idle deadline.
+The firmware generates a persistent per-device code; it no longer universally uses `123456`. iOS manages the bond. The app does not need or store your code. It waits for encrypted service readiness before sending commands, allowing up to 90 seconds for discovery/pairing. Normal commands have a separate 30-second idle deadline. An incomplete LIVE update has its own 10-second fragment deadline; stalled updates cause a reconnect instead of leaving the app silently stale.
 
 Keep WLED powered and nearby. Only one phone or reference client can occupy the bridge at a time. The app reconnects automatically while active after ordinary link loss. Pairing and permission errors wait for an explicit retry to avoid repeated system prompts. Discovery explains unavailable Bluetooth and links to app Settings when permission is denied.
 
@@ -18,6 +18,10 @@ If WLED's pairing information changes, forget that device in **iOS Settings → 
 ## Controls and limits
 
 Native Bluetooth control includes power, brightness, main-segment RGB color with the white channel preserved, and state updates from changes made elsewhere. It is not a tunnel for WLED's entire web interface. Preset/effect editing, full configuration pages, and files remain available through Wi-Fi. The bridge's documented JSON routes remain available to other clients.
+
+The session learns the firmware's validated request limit (`info.ble.maxRequest`, 256–4096 bytes) from info/state-info reads and rejects oversized requests before writing. It discovers the limit again after reconnecting. ATT write chunks include the framing prefix in their size budget. Unexpected TX data or a second response retires the connection because the protocol has no request IDs; a valid response may arrive before the final write acknowledgement and is held until that acknowledgement completes.
+
+While a control request is in flight, pending changes to explicit segment IDs retain independent fields and color slots, with the newest supplied value winning. Positional, repeated-ID, and geometry-changing arrays retain their original newer-array behavior rather than guessing segment targets. Successful state writes are followed by an authoritative readback, alongside LIVE updates.
 
 The supported firmware profiles are classic ESP32 with 4 MB or 8 MB flash, and ESP32-S3 with 8 MB flash and octal PSRAM. ESP32-C3 is excluded. These builds retain the other WLED features and filesystem capacity by using one larger application partition and **disabling OTA**. Firmware updates require USB. Back up configuration/presets before the initial factory-image installation; NVS replacement can reset credentials and pairing. Use the firmware repository's installation instructions for the exact board and image.
 
@@ -42,6 +46,8 @@ xcodebuild -project wled.xcodeproj -scheme wled \
 
 The package authorization provider avoids macOS Keychain prompts for public packages in unattended builds. Plugin validation is skipped only for the pinned SwiftLint plugin, matching the upstream CI approach. For a signed device install, configure your own development team in Xcode.
 
-Review results: 44 tests / 52 parameterized executions passed on iOS 27 Simulator, including cancellation and timeout races, serialization, live-state interleaving, ATT boundaries, UTF-8, reconnect behavior, actual SQLite migration, and removal of old pairing fields. An unsigned generic iPhone build also passed. Simulator tests use a fake transport: **actual iPhone/ESP32 pairing, RF behavior, older iOS versions, and manual visual/accessibility inspection remain to be verified.**
+Simulator regression tests use a fake transport and cover cancellation/timeout races, framing, LIVE interleaving and stalls, request limits, pending control coalescing, SQLite migration, and removal of old pairing fields. They cannot exercise the radio or iOS pairing UI.
+
+Use the [Phase 2 real-iPhone HIL guide](PHASE2-HIL.md) for signed builds, one-time phone commissioning, and the unattended production-client functional/reconnect/soak suite. Full mode also runs a separate controlled software-reboot test: the real `BleClient` must automatically reconnect with its existing bond, identify the new boot, apply a new control command, and restore the saved runtime state. Actual iPhone/ESP32 commissioning has completed; full-run outcomes and restoration evidence belong to each run's private result bundle and local `build/phase2/PHASE2-RESULTS.md`. Physical power interruptions, older iOS versions, physical light/button behavior, RF range/interference, and manual visual/accessibility checks remain separate coverage.
 
 The detailed [cross-repository review and hardware acceptance matrix](https://github.com/mc-hamster/WLED/blob/ble/docs/BLUETOOTH_REVIEW.md) is also available locally at `../WLED/docs/BLUETOOTH_REVIEW.md` when both forks are checked out together. These changes have not been pushed; use that local copy until publication.

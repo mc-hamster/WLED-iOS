@@ -15,6 +15,7 @@ final class BleBridgeSession: BleBridgeConnection {
         case bluetoothUnavailable, bluetoothUnauthorized, bluetoothUnsupported
         case deviceNotFound, serviceNotFound, rxCharacteristicNotFound, txCharacteristicNotFound
         case requestAlreadyInFlight, requestTooLarge, invalidResponse, requestTimedOut, connectionTimedOut, disconnected
+        case liveFrameTimedOut
         case requestFailed(String), pairingFailed(String)
 
         var requiresUserAction: Bool {
@@ -34,9 +35,10 @@ final class BleBridgeSession: BleBridgeConnection {
             case .serviceNotFound, .rxCharacteristicNotFound, .txCharacteristicNotFound:
                 return "This device needs firmware with the WLED Bluetooth bridge enabled."
             case .requestAlreadyInFlight: return "A Bluetooth request is already in progress."
-            case .requestTooLarge: return "This request exceeds WLED’s 4096-byte Bluetooth limit. Use Wi-Fi for larger changes."
+            case .requestTooLarge: return "This request exceeds WLED’s Bluetooth request limit. Use Wi-Fi for larger changes."
             case .invalidResponse: return "WLED sent an incomplete or invalid Bluetooth response. Please reconnect."
             case .requestTimedOut: return "WLED did not respond. Keep the device nearby and try again."
+            case .liveFrameTimedOut: return "WLED’s live state update was incomplete. Reconnecting to refresh the device."
             case .connectionTimedOut: return "Connection timed out. Keep WLED nearby and accept the iOS pairing prompt."
             case .disconnected: return "The Bluetooth connection was lost."
             case .requestFailed(let message), .pairingFailed(let message): return message
@@ -49,17 +51,21 @@ final class BleBridgeSession: BleBridgeConnection {
     private let transport: any BleTransport
     private let connectionTimeout: Duration
     private let requestTimeout: Duration
+    private let liveFrameTimeout: Duration
     private var readyWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private var responseContinuation: CheckedContinuation<BleBridgeResponse, Error>?
     private var writeContinuation: CheckedContinuation<Void, Error>?
     private var connectionTimer: Task<Void, Never>?
     private var responseTimer: Task<Void, Never>?
+    private var liveTimer: Task<Void, Never>?
     private var sendTask: Task<Void, Never>?
     private var connectionID: UUID?
     private var requestID: UUID?
+    private var liveFragmentID: UUID?
     private var pendingResponse: BleBridgeResponse?
     private var writesFinished = false
     private var writeLength = 20
+    private(set) var maximumRequestBytes = 4096
     private var isReady = false
     private var responseAssembler = BleFrameAssembler()
     private var liveAssembler = BleFrameAssembler()
@@ -70,10 +76,11 @@ final class BleBridgeSession: BleBridgeConnection {
     }
 
     init(transport: any BleTransport, connectionTimeout: Duration = .seconds(90),
-         requestTimeout: Duration = .seconds(30)) {
+         requestTimeout: Duration = .seconds(30), liveFrameTimeout: Duration = .seconds(10)) {
         self.transport = transport
         self.connectionTimeout = connectionTimeout
         self.requestTimeout = requestTimeout
+        self.liveFrameTimeout = liveFrameTimeout
         transport.onEvent = { [weak self] event in self?.handle(event) }
     }
 
@@ -111,7 +118,7 @@ final class BleBridgeSession: BleBridgeConnection {
         // Claim the slot before connect() suspends, so simultaneous callers cannot overwrite continuations.
         guard requestID == nil else { throw SessionError.requestAlreadyInFlight }
         let payload = Data("\(method.uppercased()) \(path)\n\n\(body)".utf8)
-        guard payload.count <= 4096 else { throw SessionError.requestTooLarge }
+        guard payload.count <= maximumRequestBytes else { throw SessionError.requestTooLarge }
         let id = UUID()
         requestID = id
         defer { if requestID == id { requestID = nil } }
@@ -122,7 +129,7 @@ final class BleBridgeSession: BleBridgeConnection {
             responseAssembler.reset()
             pendingResponse = nil
             writesFinished = false
-            return try await withTaskCancellationHandler {
+            let response: BleBridgeResponse = try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { continuation in
                     responseContinuation = continuation
                     armResponseTimeout(id: id)
@@ -152,11 +159,31 @@ final class BleBridgeSession: BleBridgeConnection {
                     self.fail(CancellationError(), notify: false)
                 }
             }
+            try Task.checkCancellation()
+            guard requestID == id, isReady else { throw SessionError.disconnected }
+            try updateCapabilities(from: response, method: method, path: path)
+            return response
         } catch {
             // Unidentified late packets must never become the next request's response.
             if requestID == id { fail(error, notify: !(error is CancellationError)) }
             throw error
         }
+    }
+
+    private func updateCapabilities(from response: BleBridgeResponse, method: String, path: String) throws {
+        guard method.uppercased() == "GET", response.status == 200,
+              ["/json", "/json/info", "/json/si"].contains(path) else { return }
+        struct CapabilityEnvelope: Decodable {
+            struct InfoEnvelope: Decodable { var ble: BleCapabilities? }
+            var ble: BleCapabilities?
+            var info: InfoEnvelope?
+        }
+        let envelope = try JSONDecoder().decode(CapabilityEnvelope.self, from: response.body)
+        guard let capabilities = envelope.ble ?? envelope.info?.ble else { return }
+        guard capabilities.protocol == 1, (256...4096).contains(capabilities.maxRequest) else {
+            throw SessionError.invalidResponse
+        }
+        maximumRequestBytes = capabilities.maxRequest
     }
 
     private func handle(_ event: BleTransportEvent) {
@@ -178,7 +205,14 @@ final class BleBridgeSession: BleBridgeConnection {
             waiter?.resume()
             if let requestID { armResponseTimeout(id: requestID) }
         case .response(let data):
-            guard responseContinuation != nil else { return }
+            trace("TX bytes=\(data.count) frame=\(responseAssembler.progressDescription) waiter=\(responseContinuation != nil) pending=\(pendingResponse != nil) writesFinished=\(writesFinished)")
+            // There are no request IDs on the wire. Unexpected TX bytes must
+            // retire the connection, including a second response before the
+            // final write acknowledgement releases the first response.
+            guard responseContinuation != nil, pendingResponse == nil else {
+                fail(SessionError.invalidResponse)
+                return
+            }
             if let requestID { armResponseTimeout(id: requestID) }
             do {
                 if let payload = try responseAssembler.append(data) {
@@ -186,13 +220,27 @@ final class BleBridgeSession: BleBridgeConnection {
                     pendingResponse = response
                     finishResponseIfReady()
                 }
-            } catch { fail(error) }
+            } catch { trace("TX parsing failed: \(error)"); fail(error) }
         case .live(let data):
+            trace("LIVE bytes=\(data.count) frame=\(liveAssembler.progressDescription)")
             do {
-                if let payload = try liveAssembler.append(data) { onLivePayload?(payload) }
-            } catch { fail(error) }
+                if let payload = try liveAssembler.append(data) {
+                    cancelLiveTimeout()
+                    onLivePayload?(payload)
+                } else {
+                    armLiveTimeout()
+                }
+            } catch { trace("LIVE parsing failed: \(error)"); fail(error) }
         case .failed(let error): fail(error)
         }
+    }
+
+    private func trace(_ message: @autoclosure () -> String) {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["BLE_HIL_TRACE"] == "1" {
+            print("BLE TRACE \(Date().timeIntervalSince1970) \(message())")
+        }
+        #endif
     }
 
     private func armResponseTimeout(id: UUID) {
@@ -202,6 +250,25 @@ final class BleBridgeSession: BleBridgeConnection {
             guard let self, self.requestID == id else { return }
             self.fail(SessionError.requestTimedOut)
         }
+    }
+
+    private func armLiveTimeout() {
+        cancelLiveTimeout()
+        guard let connectionID else { return }
+        let fragmentID = UUID()
+        liveFragmentID = fragmentID
+        liveTimer = Task { [weak self, liveFrameTimeout] in
+            do { try await Task.sleep(for: liveFrameTimeout) } catch { return }
+            guard let self, self.connectionID == connectionID,
+                  self.liveFragmentID == fragmentID else { return }
+            self.fail(SessionError.liveFrameTimedOut)
+        }
+    }
+
+    private func cancelLiveTimeout() {
+        liveTimer?.cancel()
+        liveTimer = nil
+        liveFragmentID = nil
     }
 
     private func finishResponseIfReady() {
@@ -217,8 +284,10 @@ final class BleBridgeSession: BleBridgeConnection {
         let wasActive = connectionID != nil
         connectionID = nil
         isReady = false
+        maximumRequestBytes = 4096
         connectionTimer?.cancel()
         responseTimer?.cancel()
+        cancelLiveTimeout()
         sendTask?.cancel()
         connectionTimer = nil
         responseTimer = nil
