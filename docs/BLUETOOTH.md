@@ -1,13 +1,13 @@
 # Bluetooth support in this fork
 
-Use this app's `ble` branch with the `ble_api_bridge` usermod from [mc-hamster/WLED](https://github.com/mc-hamster/WLED/tree/ble/usermods/ble_api_bridge). Stock WLED firmware and stock App Store releases are not this paired fork. Wi-Fi devices continue to use the upstream app's interface.
+Use this app's `ble` branch with the `ble_api_bridge` usermod from [mc-hamster/WLED](https://github.com/mc-hamster/WLED/tree/ble/usermods/ble_api_bridge). Stock WLED firmware and stock App Store releases are not this paired fork. Native Light Studio works with either connection; the Bluetooth device workspace requires capability version 2.
 
 ## First connection
 
-1. Install the correct BLE firmware for your board. Open its Wi-Fi interface and find the six-digit code under **Settings → Usermods → BleApiBridge**.
+1. Install the correct BLE firmware for your board. Retrieve its six-digit pairing code over USB serial with the explicit `B` command, or use **Settings → Usermods → BleApiBridge** from an existing connection. Wi-Fi setup is optional.
 2. Add a device in the app, select **Bluetooth**, and select a nearby WLED device.
 3. Tap **Add**. Accept the system pairing prompt and enter the firmware's code when iOS asks.
-4. Tap **Done**, open the light, and use power, brightness, and color controls.
+4. Tap **Done**, open the light, and use Light Studio. The device workspace contains configuration, files, backups, and creative tools.
 
 The firmware generates a persistent per-device code; it no longer universally uses `123456`. iOS manages the bond. The app does not need or store your code. It waits for encrypted service readiness before sending commands, allowing up to 90 seconds for discovery/pairing. Normal commands have a separate 30-second idle deadline. An incomplete LIVE update has its own 10-second fragment deadline; stalled updates cause a reconnect instead of leaving the app silently stale.
 
@@ -17,7 +17,13 @@ If WLED's pairing information changes, forget that device in **iOS Settings → 
 
 ## Controls and limits
 
-Native Bluetooth control includes power, brightness, main-segment RGB color with the white channel preserved, and state updates from changes made elsewhere. It is not a tunnel for WLED's entire web interface. Preset/effect editing, full configuration pages, and files remain available through Wi-Fi. The bridge's documented JSON routes remain available to other clients.
+Native Light Studio includes segment selection and geometry, RGB/RGBW colors, CCT, effects and their custom controls, palettes, scenes, playlists, transitions, and nightlight timing. Changes are confirmed from the device. Scene writes require a durable save receipt before the app reports success.
+
+The offline **Device workspace** bundles WLED's configuration and creative tools inside the app. Settings forms, files/backups, custom palettes, pixel art, pixel streaming, and live preview use the selected Bluetooth connection. Settings PIN authorization is separate from iOS Bluetooth pairing and scoped to the current connection. Intentional Bluetooth disable stops automatic retries and explains how to reconnect.
+
+Large requests and uploads use bounded chunks, SHA-256 verification, and a single staged commit. File reads verify a stable revision and the complete digest. Interrupted operations never resume against another connection or replay an uncertain commit. See [Bluetooth workspace architecture and acceptance](BLUETOOTH-WORKSPACE.md) for the route contract, asset workflow, and hardware checks.
+
+Bluetooth has lower throughput than Wi-Fi; large backups and pixel streams take longer. Network services such as MQTT, NTP, and UDP synchronization still require a network for those services to operate, even though their settings can be changed over Bluetooth. Optional remote font/catalog downloads use the phone's internet connection. These firmware profiles disable OTA on both transports and continue to use USB for firmware updates.
 
 The session learns the firmware's validated request limit (`info.ble.maxRequest`, 256–4096 bytes) from info/state-info reads and rejects oversized requests before writing. It discovers the limit again after reconnecting. ATT write chunks include the framing prefix in their size budget. Unexpected TX data or a second response retires the connection because the protocol has no request IDs; a valid response may arrive before the final write acknowledgement and is held until that acknowledgement completes.
 

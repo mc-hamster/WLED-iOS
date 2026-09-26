@@ -35,7 +35,7 @@ final class BleBridgeSession: BleBridgeConnection {
             case .serviceNotFound, .rxCharacteristicNotFound, .txCharacteristicNotFound:
                 return "This device needs firmware with the WLED Bluetooth bridge enabled."
             case .requestAlreadyInFlight: return "A Bluetooth request is already in progress."
-            case .requestTooLarge: return "This request exceeds WLED’s Bluetooth request limit. Use Wi-Fi for larger changes."
+            case .requestTooLarge: return "This change exceeds the Bluetooth request limit. Split it into smaller changes or use a chunked file transfer."
             case .invalidResponse: return "WLED sent an incomplete or invalid Bluetooth response. Please reconnect."
             case .requestTimedOut: return "WLED did not respond. Keep the device nearby and try again."
             case .liveFrameTimedOut: return "WLED’s live state update was incomplete. Reconnecting to refresh the device."

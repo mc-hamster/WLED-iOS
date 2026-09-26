@@ -24,9 +24,14 @@ enum WebsocketStatus {
 @MainActor
 class DeviceWithState: ObservableObject, Identifiable {
     private var cancellables = Set<AnyCancellable>()
+    let workspaceOperations = WorkspaceOperationQueue()
 
     @Published var device: Device
     @Published var stateInfo: DeviceStateInfo?
+    @Published var rawStatePayload: Data?
+    /// Changes whenever the command session is retired or replaced. Multi-step
+    /// operations pin this value so chunks cannot cross connection lifetimes.
+    @Published var connectionEpoch = UUID()
     @Published var websocketStatus: WebsocketStatus = .disconnected
     @Published var availableUpdateVersion: String?
     @Published var connectionError: String?
@@ -43,9 +48,18 @@ class DeviceWithState: ObservableObject, Identifiable {
     @Published var routeMessages: [DeviceConnectionType: String] = [:]
     var connectAction: () -> Void = {}
     var disconnectAction: () -> Void = {}
+    /// Called only after a saved firmware receipt confirms Bluetooth was disabled.
+    var bluetoothDisabledAction: () -> Void = {}
     var openAction: () -> Void = {}
     var modeAction: (DeviceConnectionMode) -> Void = { _ in }
     var autoConnectAction: (Bool) -> Void = { _ in }
+    var requestAction: (String, String, Data, String?) async throws -> DeviceAPIResponse = { _, _, _, _ in
+        throw DeviceAPIError.disconnected
+    }
+
+    func request(method: String = "GET", path: String, body: Data = Data(), contentType: String? = nil) async throws -> DeviceAPIResponse {
+        try await requestAction(method, path, body, contentType)
+    }
 
     var connectionSummary: String {
         if manuallyDisconnected { return "Disconnected by you" }

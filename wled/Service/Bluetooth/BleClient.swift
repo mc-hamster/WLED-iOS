@@ -6,6 +6,7 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
     var onDeviceStateUpdated: ((DeviceStateInfo) -> Void)?
     private let automaticallyRetries: Bool
     private let session: any BleBridgeConnection
+    private let requests: BleRequestQueue
     private var pendingState: WledState?
     private var connectionTask: Task<Void, Never>?
     private var stateTask: Task<Void, Never>?
@@ -17,8 +18,14 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
     init(device: Device, session: (any BleBridgeConnection)? = nil, automaticallyRetries: Bool = true) {
         self.automaticallyRetries = automaticallyRetries
         self.deviceState = DeviceWithState(initialDevice: device)
-        self.session = session ?? BleBridgeSession(peripheralID: device.bleIdentifierUUID ?? UUID())
+        let connection = session ?? BleBridgeSession(peripheralID: device.bleIdentifierUUID ?? UUID())
+        self.session = connection
+        self.requests = BleRequestQueue(session: connection)
         super.init()
+        self.deviceState.requestAction = { [weak self] method, path, body, contentType in
+            guard let self else { throw DeviceAPIError.disconnected }
+            return try await self.request(method: method, path: path, body: body, contentType: contentType)
+        }
         self.session.onLivePayload = { [weak self] payload in
             guard let self, !self.manuallyDisconnected else { return }
             do { try self.handlePayload(payload) } catch { self.handleFailure(error) }
@@ -40,7 +47,7 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
             guard let self else { return }
             do {
                 try await self.session.connect()
-                let response = try await self.session.request(method: "GET", path: "/json", body: "")
+                let response = try await self.requests.request(method: "GET", path: "/json/si")
                 guard current == self.generation, !Task.isCancelled else { return }
                 try self.handleBridgeResponse(response)
                 self.retryCount = 0
@@ -57,8 +64,10 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
     func disconnect() {
         manuallyDisconnected = true
         generation += 1
+        deviceState.connectionEpoch = UUID()
         cancelTasks()
         pendingState = nil
+        requests.cancelAll()
         session.disconnect()
         deviceState.websocketStatus = .disconnected
         deviceState.activeTransport = nil
@@ -66,6 +75,33 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
     }
 
     func destroy() { disconnect() }
+
+    func request(method: String, path: String, body: Data = Data()) async throws -> DeviceAPIResponse {
+        try await request(method: method, path: path, body: body, contentType: nil)
+    }
+
+    func request(method: String, path: String, body: Data, contentType: String?) async throws -> DeviceAPIResponse {
+        try Task.checkCancellation()
+        try validateDeviceAPIRequest(method: method, path: path)
+        guard deviceState.isOnline, !manuallyDisconnected else { throw DeviceAPIError.disconnected }
+        // BLE's request envelope has no headers. Its routes accept JSON and
+        // URL-encoded forms; file uploads use the chunked bridge endpoints.
+        if let contentType, !["application/json", "application/x-www-form-urlencoded"].contains(contentType.components(separatedBy: ";")[0]) {
+            throw DeviceAPIError.invalidRequest
+        }
+        guard let text = String(bytes: body, encoding: .utf8) else { throw DeviceAPIError.invalidUTF8 }
+        let current = generation
+        let response = try await requests.request(method: method, path: path, body: text)
+        try Task.checkCancellation()
+        guard current == generation, deviceState.isOnline, !manuallyDisconnected else {
+            throw DeviceAPIError.connectionChanged
+        }
+        let route = String(path.split(separator: "?", maxSplits: 1).first ?? "")
+        if response.status == 200, ["/json", "/json/si"].contains(route), method.uppercased() == "GET" {
+            do { try handlePayload(response.body) } catch { handleFailure(error); throw error }
+        }
+        return response
+    }
 
     func sendState(_ state: WledState) {
         guard deviceState.isOnline, !manuallyDisconnected else {
@@ -89,11 +125,11 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
                     try Task.checkCancellation()
                     self.pendingState = nil
                     let body = String(decoding: try JSONEncoder().encode(state), as: UTF8.self)
-                    let response = try await self.session.request(method: "POST", path: "/json/state", body: body)
+                    let response = try await self.requests.request(method: "POST", path: "/json/state", body: body)
                     guard current == self.generation, !Task.isCancelled else { return }
                     try self.handleBridgeResponse(response, acceptsSuccessEnvelope: true)
                     // Read authoritative state even when live indications are not supported by older firmware.
-                    let refreshed = try await self.session.request(method: "GET", path: "/json", body: "")
+                    let refreshed = try await self.requests.request(method: "GET", path: "/json/si")
                     guard current == self.generation, !Task.isCancelled else { return }
                     try self.handleBridgeResponse(refreshed)
                 }
@@ -123,6 +159,7 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
             throw BleBridgeSession.SessionError.pairingFailed("The connected device has a different identity. Remove it and add the correct device.")
         }
         deviceState.lastConfirmedAt = Date()
+        deviceState.rawStatePayload = payload
         deviceState.stateInfo = info
         onDeviceStateUpdated?(info)
     }
@@ -142,7 +179,9 @@ final class BleClient: NSObject, ObservableObject, DeviceConnectionClient {
         deviceState.isSending = false
         pendingState = nil
         generation += 1
+        deviceState.connectionEpoch = UUID()
         cancelTasks()
+        requests.cancelAll(throwing: error)
         session.disconnect()
         deviceState.websocketStatus = .disconnected
         deviceState.connectionError = error.localizedDescription

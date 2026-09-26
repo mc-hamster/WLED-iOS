@@ -16,19 +16,23 @@ class WebsocketClient: NSObject, ObservableObject, URLSessionWebSocketDelegate, 
     private var receiveTask: Task<Void, Never>?
     private var healthTask: Task<Void, Never>?
     private var commandTimer: Task<Void, Never>?
+    private var apiTasks: [UUID: Task<(Data, URLResponse), Error>] = [:]
 
-    init(device: Device, automaticallyRetries: Bool = true) {
+    init(device: Device, automaticallyRetries: Bool = true, configuration: URLSessionConfiguration = .default) {
         deviceState = DeviceWithState(initialDevice: device)
         self.automaticallyRetries = automaticallyRetries
         let proxy = WeakSessionDelegate()
         delegateProxy = proxy
-        let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 15
         configuration.timeoutIntervalForResource = 30
         configuration.waitsForConnectivity = false
         urlSession = URLSession(configuration: configuration, delegate: proxy, delegateQueue: .main)
         super.init()
         proxy.delegate = self
+        deviceState.requestAction = { [weak self] method, path, body, contentType in
+            guard let self else { throw DeviceAPIError.disconnected }
+            return try await self.request(method: method, path: path, body: body, contentType: contentType)
+        }
     }
 
     func connect() {
@@ -79,6 +83,7 @@ class WebsocketClient: NSObject, ObservableObject, URLSessionWebSocketDelegate, 
                         self.fail("This network address belongs to a different device. Check the address in Edit Device.", requiresAction: true)
                         return
                     }
+                    self.deviceState.rawStatePayload = data
                     self.deviceState.stateInfo = info
                     self.deviceState.lastConfirmedAt = Date()
                     self.deviceState.activeTransport = .wifi
@@ -101,10 +106,13 @@ class WebsocketClient: NSObject, ObservableObject, URLSessionWebSocketDelegate, 
     func disconnect() {
         manuallyDisconnected = true
         generation += 1
+        deviceState.connectionEpoch = UUID()
         retryTask?.cancel(); retryTask = nil
         receiveTask?.cancel(); receiveTask = nil
         commandTimer?.cancel(); commandTimer = nil
         healthTask?.cancel(); healthTask = nil
+        for task in apiTasks.values { task.cancel() }
+        apiTasks.removeAll()
         socket?.cancel(with: .normalClosure, reason: nil); socket = nil
         deviceState.websocketStatus = .disconnected
         deviceState.activeTransport = nil
@@ -155,6 +163,56 @@ class WebsocketClient: NSObject, ObservableObject, URLSessionWebSocketDelegate, 
 
     func destroy() { disconnect(); urlSession.invalidateAndCancel() }
     deinit { urlSession.invalidateAndCancel() }
+
+    func request(method: String, path: String, body: Data = Data()) async throws -> DeviceAPIResponse {
+        try await request(method: method, path: path, body: body, contentType: nil)
+    }
+
+    func request(method: String, path: String, body: Data, contentType: String?) async throws -> DeviceAPIResponse {
+        try Task.checkCancellation()
+        try validateDeviceAPIRequest(method: method, path: path)
+        guard deviceState.isOnline, !manuallyDisconnected else { throw DeviceAPIError.disconnected }
+        let address = try validatedDeviceAddress(deviceState.device.wifiAddress)
+        guard let url = URL(string: "http://\(address)\(path)") else { throw DeviceAPIError.invalidRequest }
+        let current = generation
+        var request = URLRequest(url: url)
+        request.httpMethod = method.uppercased()
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        if !body.isEmpty {
+            request.httpBody = body
+            let type = contentType ?? (path.hasPrefix("/settings/") ? "application/x-www-form-urlencoded" : "application/json")
+            guard !type.contains("\r"), !type.contains("\n") else { throw DeviceAPIError.invalidRequest }
+            request.setValue(type, forHTTPHeaderField: "Content-Type")
+        }
+        let requestID = UUID()
+        let operation = Task { try await urlSession.data(for: request) }
+        apiTasks[requestID] = operation
+        defer { apiTasks[requestID] = nil }
+        let (data, response) = try await withTaskCancellationHandler {
+            try await operation.value
+        } onCancel: {
+            operation.cancel()
+        }
+        try Task.checkCancellation()
+        guard current == generation, deviceState.isOnline, !manuallyDisconnected else {
+            throw DeviceAPIError.connectionChanged
+        }
+        guard let http = response as? HTTPURLResponse else { throw DeviceAPIError.invalidResponse }
+        let route = String(path.split(separator: "?", maxSplits: 1).first ?? "")
+        if http.statusCode == 200, ["/json", "/json/si"].contains(route), method.uppercased() == "GET" {
+            let info = try JSONDecoder().decode(DeviceStateInfo.self, from: data)
+            guard !normalizedDeviceMAC(info.info.mac).isEmpty,
+                  normalizedDeviceMAC(info.info.mac) == normalizedDeviceMAC(deviceState.device.macAddress) else {
+                fail("This network address belongs to a different device. Check the address in Edit Device.", requiresAction: true)
+                throw DeviceAPIError.invalidResponse
+            }
+            deviceState.rawStatePayload = data
+            deviceState.stateInfo = info
+            deviceState.lastConfirmedAt = Date()
+            onDeviceStateUpdated?(info)
+        }
+        return DeviceAPIResponse(status: http.statusCode, contentType: http.value(forHTTPHeaderField: "Content-Type") ?? "application/octet-stream", body: data)
+    }
 }
 
 // MARK: - WeakSessionDelegate
@@ -177,5 +235,13 @@ final class WeakSessionDelegate: NSObject, URLSessionWebSocketDelegate, @uncheck
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         delegate?.urlSession?(session, webSocketTask: webSocketTask, didCloseWith: closeCode, reason: reason)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        guard let original = task.originalRequest?.url, let destination = request.url,
+              destination.scheme == original.scheme, destination.host == original.host,
+              destination.port == original.port else { completionHandler(nil); return }
+        completionHandler(request)
     }
 }

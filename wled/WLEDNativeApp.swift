@@ -18,7 +18,9 @@ struct WLEDNativeApp: App {
     
     var body: some Scene {
         WindowGroup {
-            if isolatesHostedTests {
+            if studioPreviewEnabled {
+                studioPreview
+            } else if isolatesHostedTests {
                 // Hosted unit tests must not connect saved devices either. The
                 // hardware suite separately opts in before owning the BLE peer.
                 ProgressView("Running automated tests")
@@ -32,6 +34,20 @@ struct WLEDNativeApp: App {
         }
     }
     
+    private var studioPreviewEnabled: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        return ProcessInfo.processInfo.environment["WLED_STUDIO_PREVIEW"] == "1"
+        #else
+        return false
+        #endif
+    }
+
+    @ViewBuilder private var studioPreview: some View {
+        #if DEBUG && targetEnvironment(simulator)
+        StudioPreviewRoot()
+        #endif
+    }
+
     private func refreshVersionsSync() {
         Task {
             // Only update automatically from Github once per 24 hours to avoid rate limits

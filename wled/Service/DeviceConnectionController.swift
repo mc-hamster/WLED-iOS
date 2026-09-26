@@ -36,6 +36,7 @@ final class DeviceConnectionController: DeviceConnectionClient {
         deviceState.autoConnect = defaults.object(forKey: key + ".auto") as? Bool ?? (device.connectionMode == .wifi)
         deviceState.connectAction = { [weak self] in self?.connectByUser() }
         deviceState.disconnectAction = { [weak self] in self?.disconnectByUser() }
+        deviceState.bluetoothDisabledAction = { [weak self] in self?.bluetoothWasDisabled() }
         deviceState.openAction = { [weak self] in
             guard let self, !self.deviceState.manuallyDisconnected else { return }
             self.demanded = true
@@ -46,6 +47,10 @@ final class DeviceConnectionController: DeviceConnectionClient {
             guard let self else { return }
             self.defaults.set(enabled, forKey: self.key + ".auto")
             self.deviceState.autoConnect = enabled
+        }
+        deviceState.requestAction = { [weak self] method, path, body, contentType in
+            guard let self else { throw DeviceAPIError.disconnected }
+            return try await self.request(method: method, path: path, body: body, contentType: contentType)
         }
         signature = configuration
     }
@@ -93,6 +98,17 @@ final class DeviceConnectionController: DeviceConnectionClient {
         deviceState.recoveryMessage = "Disconnected. Lights keep their current state. Tap Connect to resume."
     }
 
+    private func bluetoothWasDisabled() {
+        // A saved BLE-disable command is an intentional end to this connection.
+        // Preserve that intent across refresh/resume instead of trying another
+        // route or reconnecting to a peripheral that is no longer advertising.
+        guard (deviceState.activeTransport ?? deviceState.attemptedTransport) == .ble else { return }
+        disconnectByUser()
+        deviceState.connectionError = nil
+        deviceState.requiresUserAction = false
+        deviceState.recoveryMessage = "Bluetooth is turned off on WLED. Enable it on the device, or choose Wi-Fi and tap Connect."
+    }
+
     func connect() {
         paused = false
         guard !deviceState.manuallyDisconnected, client == nil, retry == nil,
@@ -112,6 +128,7 @@ final class DeviceConnectionController: DeviceConnectionClient {
 
     private func retire() {
         generation += 1
+        deviceState.connectionEpoch = UUID()
         retry?.cancel(); retry = nil
         deadline?.cancel(); deadline = nil
         observation?.cancel(); observation = nil
@@ -142,6 +159,7 @@ final class DeviceConnectionController: DeviceConnectionClient {
             return
         }
         tried.insert(route)
+        deviceState.connectionEpoch = UUID()
         let current = generation
         let transport = factory(deviceState.device, route)
         client = transport
@@ -175,6 +193,7 @@ final class DeviceConnectionController: DeviceConnectionClient {
     private func synchronize(route: DeviceConnectionType) {
         guard let client else { return }
         let state = client.deviceState
+        if deviceState.rawStatePayload != state.rawStatePayload { deviceState.rawStatePayload = state.rawStatePayload }
         deviceState.commandMessage = state.commandMessage ?? deviceState.commandMessage
         deviceState.isSending = state.isSending
         if state.websocketStatus == .connected {
@@ -225,5 +244,23 @@ final class DeviceConnectionController: DeviceConnectionClient {
         deviceState.isSending = true
         deviceState.commandMessage = "Sending…"
         client?.sendState(state)
+    }
+
+    func request(method: String, path: String, body: Data = Data()) async throws -> DeviceAPIResponse {
+        try await request(method: method, path: path, body: body, contentType: nil)
+    }
+
+    func request(method: String, path: String, body: Data, contentType: String?) async throws -> DeviceAPIResponse {
+        try Task.checkCancellation()
+        try validateDeviceAPIRequest(method: method, path: path)
+        guard deviceState.isOnline, !deviceState.manuallyDisconnected, let client,
+              let route = deviceState.activeTransport else { throw DeviceAPIError.disconnected }
+        let current = generation
+        let response = try await client.request(method: method, path: path, body: body, contentType: contentType)
+        try Task.checkCancellation()
+        guard generation == current, deviceState.isOnline, deviceState.activeTransport == route else {
+            throw DeviceAPIError.connectionChanged
+        }
+        return response
     }
 }

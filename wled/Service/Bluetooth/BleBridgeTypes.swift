@@ -9,11 +9,7 @@ enum BleBridgeConstants {
     static let liveUUID = CBUUID(string: "7C2E0004-5D2B-4FD0-B1C2-0CC8F5470101")
 }
 
-struct BleBridgeResponse {
-    let status: Int
-    let contentType: String
-    let body: Data
-}
+typealias BleBridgeResponse = DeviceAPIResponse
 
 struct BleDiscoveredPeripheral: Identifiable, Hashable {
     let id: UUID

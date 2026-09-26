@@ -2,6 +2,7 @@ import XCTest
 import Foundation
 import UIKit
 import CoreData
+import CryptoKit
 @testable import WLED
 
 /// Real iPhone / ESP32 tests. Never run unless the test process explicitly opts in.
@@ -128,6 +129,183 @@ private struct HardwareFailure: LocalizedError {
 }
 
 extension BleHardwareTests {
+    /// Deliberately independent of the HTTP oracle: exercise the app's shipped
+    /// queue, raw request API, and SHA-verified workspace transfer implementation.
+    func testWorkspaceBluetoothParity() async throws {
+        try requireHardwareOptIn()
+        executionTimeAllowance = 600
+        let previousIdleTimer = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+        defer { UIApplication.shared.isIdleTimerDisabled = previousIdleTimer }
+        let identifier = try await discoverFixture()
+        let persistence = PersistenceController(inMemory: true)
+        defer { _ = persistence }
+        guard let entity = persistence.container.managedObjectModel.entitiesByName["Device"] else {
+            throw HardwareFailure("In-memory model lacks Device entity")
+        }
+        let fixture = Device(entity: entity, insertInto: persistence.container.viewContext)
+        fixture.macAddress = environment["BLE_HIL_MAC"] ?? "a4cb8fdb2cb8"
+        fixture.bleIdentifier = identifier.uuidString
+        fixture.connectionMode = .ble
+        let observed = ObservedHardwareConnection(session: makeSession(identifier))
+        let client = BleClient(device: fixture, session: observed, automaticallyRetries: false)
+        defer { client.disconnect() }
+        client.connect()
+        try await waitForWorkspaceClient(client)
+        let device = client.deviceState
+        let snapshot = try await device.request(path: "/json")
+        let root = try workspaceHardwareObject(snapshot)
+        guard let info = root["info"] as? [String: Any], let initialState = root["state"] as? [String: Any] else {
+            throw HardwareFailure("Workspace preflight lacks state or identity")
+        }
+        try requireIdentity(info)
+        guard (initialState["pl"] as? Int ?? -1) < 0,
+              (initialState["nl"] as? [String: Any])?["on"] as? Bool != true,
+              info["live"] as? Bool != true else {
+            throw HardwareFailure("Workspace fixture has an active playlist, nightlight or realtime source; no write was attempted")
+        }
+        let initialProjection = try workspaceHardwareStateProjection(initialState)
+        let capabilities = try workspaceHardwareObject(await device.request(path: "/ble/capabilities"))
+        let features = Set(capabilities["features"] as? [String] ?? [])
+        guard capabilities["version"] as? Int == 2,
+              features.isSuperset(of: ["settings", "files", "stagedRequests", "palettes", "presets", "live", "auth", "saveStatus"]) else {
+            throw HardwareFailure("Workspace firmware capabilities are incomplete")
+        }
+        var counts: [String: Int] = [:]
+        for path in ["/json/effects", "/json/fxdata", "/json/palettes"] {
+            let response = try await device.workspaceRequest(path: path)
+            try response.requireSuccess()
+            guard let values = try JSONSerialization.jsonObject(with: response.body) as? [Any], !values.isEmpty else {
+                throw HardwareFailure("Workspace catalog is missing: \(path)")
+            }
+            counts[path] = values.count
+        }
+        guard counts["/json/effects"] == counts["/json/fxdata"] else {
+            throw HardwareFailure("Effect metadata does not match effect IDs")
+        }
+        _ = try workspaceHardwareObject(await device.workspaceRequest(path: "/json/palx?page=0"))
+        let live = try workspaceHardwareObject(await device.workspaceRequest(path: "/json/live"))
+        guard let pixels = live["leds"] as? [String], !pixels.isEmpty, pixels.count <= 256,
+              pixels.allSatisfy({ $0.count == 6 && $0.allSatisfy(\.isHexDigit) }) else {
+            throw HardwareFailure("Workspace live preview is malformed or empty")
+        }
+        let auth = try workspaceHardwareObject(await device.request(path: "/ble/auth"))
+        if auth["pinRequired"] as? Bool == true, auth["authorized"] as? Bool != true {
+            let script = try await device.workspaceRequest(path: "/settings/s.js?p=3")
+            let config = try await device.workspaceRequest(path: "/cfg.json")
+            guard script.status == 401, config.status == 401 else {
+                throw HardwareFailure("Locked settings/configuration read was not rejected")
+            }
+            attach("Catalogs, live preview and PIN-protected reads passed. No PIN was submitted and no file was written.", name: "Workspace locked preflight")
+            throw XCTSkip("Workspace file lifecycle requires a fixture without a settings PIN; protected reads were verified")
+        }
+        let status = try workspaceHardwareObject(await device.request(path: "/ble/status"))
+        guard (status["config"] as? [String: Any])?["pending"] as? Bool == false,
+              (status["presets"] as? [String: Any])?["pending"] as? Bool == false,
+              status["rebootPending"] as? Bool == false else {
+            throw HardwareFailure("Fixture has pending persistence or reboot; no workspace write was attempted")
+        }
+        let settings = try await device.workspaceRequest(path: "/settings/s.js?p=3")
+        try settings.requireSuccess()
+        guard settings.contentType.contains("javascript"), String(data: settings.body, encoding: .utf8)?.contains("function GetV()") == true else {
+            throw HardwareFailure("Settings script was not delivered over Bluetooth")
+        }
+        let configBefore = try await device.workspaceRequest(path: "/cfg.json")
+        try configBefore.requireSuccess()
+        let presetsBefore = try await device.workspaceRequest(path: "/presets.json")
+        guard [200, 404].contains(presetsBefore.status) else { throw HardwareFailure("Preset backup was unavailable") }
+        let token = UUID().uuidString.lowercased()
+        let temporaryPath = "/hil-\(token.prefix(12)).bin"
+        let backup = try saveWorkspacePreflight(token: token, snapshot: snapshot.body, config: configBefore.body,
+                                               presets: presetsBefore.status == 200 ? presetsBefore.body : nil)
+        let absent = try await device.workspaceRequest(path: temporaryPath)
+        guard absent.status == 404 else { throw HardwareFailure("Temporary test path already exists; no workspace write was attempted") }
+        let payload = Data((0..<12_345).map { UInt8(truncatingIfNeeded: $0 &* 31) })
+        var failure: Error?
+        var cleanupVerified = false
+        do {
+            let uploaded = try await device.workspaceUpload(path: temporaryPath, data: payload)
+            try uploaded.requireSuccess()
+            let downloaded = try await device.workspaceRequest(path: temporaryPath)
+            try downloaded.requireSuccess()
+            guard downloaded.body == payload else { throw HardwareFailure("Binary multi-chunk workspace transfer changed bytes") }
+            // Zero-byte files are valid; replacing this test-owned file exercises
+            // begin/commit without write chunks and verifies an empty SHA digest.
+            let emptied = try await device.workspaceUpload(path: temporaryPath, data: Data())
+            try emptied.requireSuccess()
+            let empty = try await device.workspaceRequest(path: temporaryPath)
+            guard empty.status == 200, empty.body.isEmpty else { throw HardwareFailure("Empty workspace file did not round-trip") }
+        } catch { failure = error }
+        // Run cleanup uncancelled, even when the upload acknowledgement was lost.
+        // It may reconnect only to remove the unique file proven absent above.
+        let cleanup = Task { @MainActor in
+            if !device.isOnline { client.connect(); try await self.waitForWorkspaceClient(client) }
+            let identity = try self.workspaceHardwareObject(await device.request(path: "/json/info"))
+            try self.requireIdentity(identity)
+            try await removeWorkspaceHardwareFile(temporaryPath) { method, path, body in
+                try await device.request(method: method, path: path, body: body)
+            }
+            let configAfter = try await device.workspaceRequest(path: "/cfg.json")
+            let presetsAfter = try await device.workspaceRequest(path: "/presets.json")
+            guard configAfter.status == configBefore.status, configAfter.body == configBefore.body,
+                  presetsAfter.status == presetsBefore.status,
+                  presetsBefore.status == 404 || presetsAfter.body == presetsBefore.body else {
+                throw HardwareFailure("Fixture configuration or presets changed during workspace test; protected preflight backup retained")
+            }
+            let current = try self.workspaceHardwareObject(await device.request(path: "/json"))
+            guard let state = current["state"] as? [String: Any],
+                  try workspaceHardwareStateProjection(state) as NSDictionary == initialProjection as NSDictionary else {
+                throw HardwareFailure("Fixture runtime controls changed during workspace file operations")
+            }
+        }
+        do { try await cleanup.value; cleanupVerified = true } catch {
+            XCTFail("Workspace cleanup or baseline verification failed; inspect the private preflight backup")
+            if failure == nil { failure = error }
+        }
+        let report: [String: Any] = ["transport": "production BleClient/CoreBluetooth; no HTTP", "catalogCounts": counts,
+            "livePixels": pixels.count, "bytesTransferred": payload.count,
+            "sha256": SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined(),
+            "temporaryPath": temporaryPath, "backupDirectory": backup.lastPathComponent,
+            "baselineUnchangedAndFileRemoved": cleanupVerified, "transportFailures": observed.failures]
+        attach(String(decoding: try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]), as: UTF8.self),
+               name: "Bluetooth workspace parity")
+        if let failure {
+            throw HardwareFailure((failure as? HardwareFailure)?.localizedDescription ?? "Workspace hardware request failed; response bodies omitted")
+        }
+        guard observed.failures == 0 else { throw HardwareFailure("Workspace test observed a transport failure") }
+    }
+
+    private func waitForWorkspaceClient(_ client: BleClient) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+        while ContinuousClock.now < deadline {
+            if client.deviceState.isOnline { return }
+            if client.deviceState.connectionError != nil { throw HardwareFailure("Production Bluetooth client could not connect to the fixture") }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw HardwareFailure("Production Bluetooth client connection timed out")
+    }
+
+    private func workspaceHardwareObject(_ response: DeviceAPIResponse) throws -> [String: Any] {
+        try response.requireSuccess()
+        guard let object = try JSONSerialization.jsonObject(with: response.body) as? [String: Any] else {
+            throw HardwareFailure("Workspace response is not a JSON object")
+        }
+        return object
+    }
+
+    private func saveWorkspacePreflight(token: String, snapshot: Data, config: Data, presets: Data?) throws -> URL {
+        let documents = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        var directory = documents.appendingPathComponent("WorkspaceHIL", isDirectory: true).appendingPathComponent(token, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                               attributes: [.posixPermissions: 0o700, .protectionKey: FileProtectionType.complete])
+        var values = URLResourceValues(); values.isExcludedFromBackup = true
+        try directory.setResourceValues(values)
+        for (name, bytes) in [("state-info.json", snapshot), ("configuration-api.json", config), ("presets.json", presets)] {
+            if let bytes { try bytes.write(to: directory.appendingPathComponent(name), options: [.atomic, .completeFileProtection]) }
+        }
+        return directory
+    }
+
     func testRebootRecovery() async throws {
         try requireHardwareOptIn()
         executionTimeAllowance = 600
@@ -932,6 +1110,39 @@ private func hardwareStateProjection(_ state: [String: Any]) throws -> [String: 
     return result
 }
 
+/// File operations must preserve every segment field, including future firmware
+/// extensions. The workspace test excludes only changing telemetry at the top level.
+@MainActor
+private func workspaceHardwareStateProjection(_ state: [String: Any]) throws -> [String: Any] {
+    var result = try requiredHardwareFields(state, ["on", "bri"], source: "workspace state readback")
+    guard let segments = state["seg"] as? [[String: Any]] else {
+        throw HardwareFailure("Workspace state readback lacks segment array")
+    }
+    for segment in segments { _ = try requiredHardwareFields(segment, ["id"], source: "workspace segment readback") }
+    result["seg"] = segments
+    for field in ["transition", "bs", "ps", "pl", "ledmap", "udpn", "lor", "mainseg"] {
+        if let value = state[field] { result[field] = value }
+    }
+    if var nightlight = state["nl"] as? [String: Any] {
+        nightlight.removeValue(forKey: "rem")
+        result["nl"] = nightlight
+    }
+    return result
+}
+
+/// The path was proven absent before this test wrote it. Delete it directly so
+/// a corrupt file or broken download cannot prevent recovery after a failed read.
+@MainActor
+private func removeWorkspaceHardwareFile(_ path: String,
+    request: (String, String, Data) async throws -> DeviceAPIResponse) async throws {
+    let deletion = try JSONSerialization.data(withJSONObject: ["op": "delete", "path": path])
+    let deleted = try await request("POST", "/ble/fs", deletion)
+    guard [200, 404].contains(deleted.status) else { throw HardwareFailure("Temporary workspace file deletion failed") }
+    let verification = try JSONSerialization.data(withJSONObject: ["op": "read", "path": path, "offset": 0, "length": 1])
+    let missing = try await request("POST", "/ble/fs", verification)
+    guard missing.status == 404 else { throw HardwareFailure("Temporary workspace file remains after cleanup") }
+}
+
 @MainActor
 final class BleHardwareValidationTests: XCTestCase {
     func testMissingResponseFieldsThrowInsteadOfTrapping() {
@@ -947,6 +1158,48 @@ final class BleHardwareValidationTests: XCTestCase {
                                       "fx": 0, "sx": 0, "ix": 0, "pal": 0, "sel": false, "frz": true]
         let state: [String: Any] = ["on": false, "bri": 1, "seg": [segment]]
         XCTAssertEqual(try hardwareStateProjection(state) as NSDictionary, state as NSDictionary)
+    }
+
+    func testWorkspaceProjectionDetectsGeometryUnknownFieldsAndSyncChanges() throws {
+        let segment: [String: Any] = ["id": 0, "start": 0, "stop": 30, "rev": false,
+                                      "futureSegmentOption": ["enabled": false]]
+        let state: [String: Any] = ["on": true, "bri": 128, "seg": [segment], "mainseg": 0,
+            "transition": 7, "bs": 0, "ps": -1, "pl": -1, "lor": 0, "ledmap": 0,
+            "udpn": ["send": false, "recv": true, "sgrp": 1, "rgrp": 1],
+            "nl": ["on": false, "dur": 60, "tbri": 0, "rem": -1]]
+        let baseline = try workspaceHardwareStateProjection(state) as NSDictionary
+        for (key, value) in [("stop", 20 as Any), ("rev", true), ("futureSegmentOption", ["enabled": true])] {
+            var changed = state
+            var changedSegment = segment
+            changedSegment[key] = value
+            changed["seg"] = [changedSegment]
+            XCTAssertNotEqual(try workspaceHardwareStateProjection(changed) as NSDictionary, baseline, key)
+        }
+        var changedSync = state
+        changedSync["udpn"] = ["send": true, "recv": true, "sgrp": 1, "rgrp": 1]
+        XCTAssertNotEqual(try workspaceHardwareStateProjection(changedSync) as NSDictionary, baseline)
+        var telemetry = state
+        telemetry["error"] = 19
+        telemetry["nl"] = ["on": false, "dur": 60, "tbri": 0, "rem": 20]
+        XCTAssertEqual(try workspaceHardwareStateProjection(telemetry) as NSDictionary, baseline)
+    }
+
+    func testWorkspaceCleanupDeletesWithoutDependingOnFileRead() async throws {
+        for deletionStatus in [200, 404] {
+            var operations: [String] = []
+            try await removeWorkspaceHardwareFile("/hil-test.bin") { method, route, data in
+                XCTAssertEqual(method, "POST")
+                XCTAssertEqual(route, "/ble/fs")
+                let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                XCTAssertEqual(payload["path"] as? String, "/hil-test.bin")
+                let operation = try XCTUnwrap(payload["op"] as? String)
+                operations.append(operation)
+                if operation == "read" { XCTAssertEqual(operations, ["delete", "read"]) }
+                return DeviceAPIResponse(status: operation == "delete" ? deletionStatus : 404,
+                                         contentType: "application/json", body: Data())
+            }
+            XCTAssertEqual(operations, ["delete", "read"])
+        }
     }
 }
 

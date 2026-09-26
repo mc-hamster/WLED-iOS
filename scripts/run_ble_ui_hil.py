@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Run already-built iPhone UI HIL with an independent Mac HTTP observer.
+"""Run already-built iPhone UI HIL with an independent Mac HTTP or USB observer.
 
 Requires a signed build-for-testing of scheme wled-ble-ui, the already-bonded
 iPhone unlocked, and no other BLE central. Saves private artifacts before any
 mutation, disables runtime UDP sending while native UI writes run, and restores
-the exact HTTP baseline even if XCTest fails. No configuration is persisted.
+the exact JSON baseline even if XCTest fails. No configuration is persisted.
 
 Example:
   python3 scripts/run_ble_ui_hil.py --xctestrun build/.../wled-ble-ui.xctestrun \
       --device 00008140-000818111AE3001C
+
+Bluetooth-only Studio coverage without any device Wi-Fi/HTTP connection:
+  python3 scripts/run_ble_ui_hil.py --mode studio --serial-port /dev/cu.usbmodem2101 \
+      --xctestrun build/.../wled-ble-ui.xctestrun --device 00008140-000818111AE3001C
 
 The UI runner never receives network credentials or a passkey. --prepare-only
 requires a previously captured /json snapshot via --baseline-json and executes
@@ -27,6 +31,7 @@ from pathlib import Path
 import plistlib
 import re
 import signal
+import threading
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -36,7 +41,10 @@ import run_ble_hil as common
 
 MAX_BODY = 262144
 SELECTOR = "BleUserInterfaceTests/testNativeBluetoothControlsAndForegroundReconnect"
+STUDIO_SELECTOR = "BleUserInterfaceTests/testBluetoothStudioAndOfflineWorkspace"
 CORE_FIELDS = ("on", "bri", "transition", "bs", "ps", "pl", "ledmap", "nl", "udpn", "lor", "mainseg", "seg")
+STUDIO_SEGMENT_FIELDS = ("id", "on", "bri", "col", "fx", "sx", "ix", "pal", "c1", "c2", "c3",
+                         "o1", "o2", "o3", "frz", "cct", "rev", "mi", "rY", "mY", "m12", "si")
 
 
 class CheckFailure(RuntimeError):
@@ -65,13 +73,13 @@ def projection(state):
 
 def validate_snapshot(value, expected_mac):
     check(isinstance(value, dict) and isinstance(value.get("state"), dict) and isinstance(value.get("info"), dict),
-          "HTTP response lacks state/info objects")
+          "Oracle response lacks state/info objects")
     check(normalize_mac(value["info"].get("mac")) == expected_mac, "Fixture MAC identity mismatch")
     check(type(value["info"].get("uptime")) is int and value["info"]["uptime"] >= 0, "Fixture lacks uptime")
     return value
 
 
-def fixture_baseline(snapshot, expected_mac):
+def fixture_baseline(snapshot, expected_mac, *, studio=False):
     validate_snapshot(snapshot, expected_mac)
     state, info = snapshot["state"], snapshot["info"]
     check(type(state.get("ps")) is int and state["ps"] <= 0, "Active preset is unsupported")
@@ -90,7 +98,7 @@ def fixture_baseline(snapshot, expected_mac):
               "Every segment must expose ID and freeze flag")
         check(segment["id"] not in ids, "Duplicate segment IDs")
         ids.add(segment["id"])
-    return {
+    result = {
         "schema": 1, "expected_mac": expected_mac, "captured_utc": common.utc_now(),
         "projection": projection(state),
         "restore": {"on": state["on"], "bri": state["bri"],
@@ -98,6 +106,17 @@ def fixture_baseline(snapshot, expected_mac):
                     "udpn": {"send": state["udpn"]["send"]}},
         "info": {key: info[key] for key in ("mac", "name", "ver", "vid", "uptime", "live") if key in info},
     }
+    if studio:
+        segment = next((segment for segment in segments if segment["id"] == state.get("mainseg")), segments[0])
+        check(all(type(segment.get(key)) is int for key in ("fx", "pal", "sx", "ix", "c1", "c2", "c3")),
+              "Studio fixture lacks complete effect restoration fields")
+        check(all(type(segment.get(key)) is bool for key in ("o1", "o2", "o3")),
+              "Studio fixture lacks effect option restoration fields")
+        result["restore"]["seg"] = [dict({key: copy.deepcopy(value) for key, value in segment.items()
+                                           if key in STUDIO_SEGMENT_FIELDS}, fxdef=False) for segment in segments]
+        result["studio"] = {"segment_id": segment["id"], "effect_target": 2 if segment["fx"] == 0 else 0,
+                            "palette_target": 2 if segment["pal"] == 0 else 0}
+    return result
 
 
 class HttpOracle:
@@ -171,6 +190,74 @@ class HttpOracle:
         return await self.request(payload)
 
 
+class SerialOracle(HttpOracle):
+    """Independent USB JSON state/info oracle; never opens a BLE connection."""
+
+    def __init__(self, port, baud, expected_mac):
+        self.port, self.baud, self.expected_mac = port, baud, expected_mac
+        self.connection = None
+        self.lock = threading.Lock()
+
+    def exchange(self, update):
+        import serial  # Optional dependency: needed only when --serial-port is used.
+        with self.lock:
+            if self.connection is None:
+                connection = serial.Serial(port=None, baudrate=self.baud, timeout=0.1, write_timeout=1, exclusive=True)
+                connection.rts = False
+                # Native USB CDC requires DTR for Serial's connected state. RTS
+                # stays low; neither reset nor baud-change commands are sent.
+                connection.dtr = True
+                connection.port = self.port
+                connection.open()
+                self.connection = connection
+            connection = self.connection
+            connection.reset_input_buffer()
+            payload = copy.deepcopy(update) if update is not None else {}
+            payload["v"] = True
+            data = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode() + b"\n"
+            # ESP32 USB CDC's default RX queue holds only 256 bytes. A single
+            # host write can overflow it before the loop starts parsing JSON;
+            # WLED silently discards that malformed command. Pace USB packets
+            # while staying below the parser's 100 ms inter-byte timeout.
+            for offset in range(0, len(data), 64):
+                chunk = data[offset:offset + 64]
+                check(connection.write(chunk) == len(chunk), "USB JSON command was not fully written")
+                if offset + len(chunk) < len(data):
+                    time.sleep(0.01)
+            deadline = time.monotonic() + 3
+            buffer = bytearray()
+            while time.monotonic() < deadline:
+                buffer.extend(connection.read(max(1, min(connection.in_waiting, 8192))))
+                check(len(buffer) <= MAX_BODY, "USB JSON response exceeds 256 KiB")
+                while b"\n" in buffer:
+                    line, _, remainder = buffer.partition(b"\n")
+                    buffer = bytearray(remainder)
+                    # Firmware diagnostics can precede JSON on the same line.
+                    for offset, character in enumerate(line):
+                        if character != ord("{"):
+                            continue
+                        try:
+                            reply = json.loads(line[offset:])
+                        except (ValueError, UnicodeDecodeError):
+                            continue
+                        if isinstance(reply, dict) and "state" in reply and "info" in reply:
+                            return validate_snapshot(reply, self.expected_mac)
+                        if isinstance(reply, dict) and "error" in reply:
+                            raise CheckFailure("USB JSON command was rejected by the device")
+            raise CheckFailure("USB JSON state/info response timed out")
+
+    async def request(self, update=None):
+        return await asyncio.to_thread(self.exchange, update)
+
+    async def close(self):
+        def close_connection():
+            with self.lock:
+                if self.connection is not None:
+                    self.connection.close()
+                    self.connection = None
+        await asyncio.to_thread(close_connection)
+
+
 def ui_configuration(base, source_root, args, baseline):
     document = common.rebase_testroot(copy.deepcopy(base), source_root)
     targets = list(common.targets(document))
@@ -181,7 +268,7 @@ def ui_configuration(base, source_root, args, baseline):
     environment = target.setdefault("EnvironmentVariables", {})
     for mapping in (environment, target.setdefault("TestingEnvironmentVariables", {}), target.setdefault("UITargetAppEnvironmentVariables", {})):
         for key in list(mapping):
-            if key.startswith(("BLE_HIL", "BLE_UI_")):
+            if key.startswith(("BLE_HIL", "BLE_UI_", "WLED_STUDIO_PREVIEW")):
                 del mapping[key]
     environment.update({"BLE_UI_HIL": "1", "BLE_UI_MAC": args.mac, "BLE_UI_NAME": args.advertised_name,
                         "BLE_UI_DEVICE_NAME": args.device_name or baseline["info"].get("name") or "WLED"})
@@ -189,10 +276,14 @@ def ui_configuration(base, source_root, args, baseline):
         environment["BLE_UI_FALLBACK_ADDRESS"] = args.fallback_address
     if args.brightness:
         environment["BLE_UI_BRIGHTNESS"] = str(baseline["restore"]["bri"])
+    studio = getattr(args, "mode", "controls") == "studio"
+    if studio:
+        environment.update({"BLE_UI_MODE": "studio", "BLE_UI_EFFECT_TARGET": str(baseline["studio"]["effect_target"]),
+                            "BLE_UI_PALETTE_TARGET": str(baseline["studio"]["palette_target"])})
     target["ParallelizationEnabled"] = False
     target["UserAttachmentLifetime"] = "keepAlways"
     target["SystemAttachmentLifetime"] = "keepNever"
-    target["OnlyTestIdentifiers"] = [SELECTOR]
+    target["OnlyTestIdentifiers"] = [STUDIO_SELECTOR if studio else SELECTOR]
     target.pop("SkipTestIdentifiers", None)
     return document
 
@@ -220,11 +311,17 @@ def evidence(samples, baseline, brightness):
     changed_brightness = any(sample["bri"] != baseline["restore"]["bri"] for sample in observed)
     uptimes = [baseline["info"]["uptime"], *(sample["uptime"] for sample in observed)]
     rollbacks = [(before, after) for before, after in zip(uptimes, uptimes[1:]) if after < before]
-    return {"successful_samples": len(observed), "failed_samples": len(samples) - len(observed),
+    result = {"successful_samples": len(observed), "failed_samples": len(samples) - len(observed),
             "observed_power_off": False in powers, "observed_power_on": True in powers,
             "observed_brightness_change": changed_brightness, "brightness_required": brightness,
             "uptime_rollbacks": rollbacks,
             "passed": powers == {False, True} and (changed_brightness or not brightness) and not rollbacks}
+    if studio := baseline.get("studio"):
+        effect = any(sample.get("segment_id") == studio["segment_id"] and sample.get("fx") == studio["effect_target"] for sample in observed)
+        palette = any(sample.get("segment_id") == studio["segment_id"] and sample.get("pal") == studio["palette_target"] for sample in observed)
+        result.update(observed_effect_target=effect, observed_palette_target=palette)
+        result["passed"] = result["passed"] and effect and palette
+    return result
 
 
 async def stop_process(process):
@@ -282,7 +379,8 @@ async def shield_cleanup(operation):
 
 
 async def run(args, output, report):
-    oracle = HttpOracle(args.http_url, args.mac)
+    oracle = (SerialOracle(args.serial_port, args.serial_baud, args.mac) if getattr(args, "serial_port", None)
+              else HttpOracle(args.http_url, args.mac))
     process = None
     baseline = None
     touched = False
@@ -291,7 +389,7 @@ async def run(args, output, report):
     report["restored_exact"] = False
     try:
         raw = json.loads(args.baseline_json.read_text()) if args.prepare_only else await oracle.request()
-        baseline = fixture_baseline(raw, args.mac)
+        baseline = fixture_baseline(raw, args.mac, studio=getattr(args, "mode", "controls") == "studio")
         common.private_json(output / "baseline.json", baseline)
         base = plistlib.loads(args.xctestrun.read_bytes())
         configuration = ui_configuration(base, args.xctestrun.parent, args, baseline)
@@ -310,9 +408,11 @@ async def run(args, output, report):
             "input_xctestrun": str(args.xctestrun), "input_xctestrun_sha256": common.sha256(args.xctestrun),
             "configuration_sha256": common.sha256(path), "command": command, "device": args.device,
             "expected_mac": args.mac, "poll_interval_seconds": args.interval,
+            "oracle": {"transport": "usb" if getattr(args, "serial_port", None) else "http",
+                       "serial_port": getattr(args, "serial_port", None), "serial_baud": getattr(args, "serial_baud", None)},
             "notes": ["Core API projection excludes transient error flags and usermod connection telemetry.",
                       "Source hashes describe preparation time; binary hashes identify what actually executes.",
-                      "UI handles saved-app connection preference; Mac HTTP restores device state.",
+                      "UI handles saved-app connection preference; the independent Mac oracle restores device state.",
                       "No passkeys, credentials, cfg or raw Bluetooth payloads are captured."]})
         if args.prepare_only:
             report["status"] = "prepared_no_hardware"
@@ -344,6 +444,10 @@ async def run(args, output, report):
                         check(type(state.get("on")) is bool and type(state.get("bri")) is int, "Malformed power/brightness observation")
                         check(state.get("udpn", {}).get("send") is False, "Runtime UDP suppression changed during UI test")
                         sample.update({"ok": True, "on": state["on"], "bri": state["bri"], "uptime": info["uptime"]})
+                        if studio := baseline.get("studio"):
+                            segment = next((item for item in state.get("seg", []) if item.get("id") == studio["segment_id"]), None)
+                            check(segment is not None, "Studio target segment disappeared")
+                            sample.update(segment_id=segment["id"], fx=segment.get("fx"), pal=segment.get("pal"))
                     except Exception as error:
                         sample["error_type"] = type(error).__name__
                         if isinstance(error, CheckFailure):
@@ -380,6 +484,8 @@ async def run(args, output, report):
                 report["returncode"] = process.returncode
             if touched and baseline is not None:
                 await restore(oracle, baseline, report)
+            if isinstance(oracle, SerialOracle):
+                await oracle.close()
         await shield_cleanup(cleanup())
         if process is not None:
             try:
@@ -408,10 +514,14 @@ def parse_args(argv=None):
     parser.add_argument("--device")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--http-url", default="http://10.10.41.74")
+    parser.add_argument("--serial-port", help="Use USB JSON instead of HTTP for independent observation/restoration (e.g. /dev/cu.usbmodem2101)")
+    parser.add_argument("--serial-baud", type=int, default=115200)
     parser.add_argument("--mac", default="a4cb8fdb2cb8")
     parser.add_argument("--advertised-name", default="WLED-db2cb8")
     parser.add_argument("--fallback-address", help="Read-only fault proxy endpoint for a verified Wi-Fi failure/BLE fallback test")
     parser.add_argument("--device-name", help="Saved app display name, if it differs from firmware info.name")
+    parser.add_argument("--mode", choices=("controls", "studio"), default="controls",
+                        help="controls tests Wi-Fi/BLE switching; studio pins BLE and tests Light, effects, palettes, read-only Scenes and offline Workspace")
     parser.add_argument("--no-brightness", dest="brightness", action="store_false", help="Verify power/lifecycle only; do not claim brightness coverage")
     parser.add_argument("--timeout", type=float, default=900, help="Whole test deadline; bounded process stop/restoration follow")
     parser.add_argument("--interval", type=float, default=0.5)
@@ -429,9 +539,14 @@ def parse_args(argv=None):
         parser.error("timeout must be 30..3600 seconds and interval 0.5..1 second")
     if args.prepare_only != bool(args.baseline_json):
         parser.error("--prepare-only requires --baseline-json; live runs capture their own baseline")
+    if args.mode == "studio" and (not args.brightness or args.fallback_address):
+        parser.error("--mode studio requires brightness coverage and cannot run the Wi-Fi fallback scenario")
+    if args.serial_port and (not args.serial_port.startswith("/dev/") or any(char in args.serial_port for char in "\r\n") or args.serial_baud not in (115200, 230400, 460800, 500000, 576000, 921600, 1000000, 1500000)):
+        parser.error("serial port must name a /dev/ device and use a supported WLED baud rate")
     try:
         args.mac = normalize_mac(args.mac)
-        HttpOracle(args.http_url, args.mac)
+        if not args.serial_port:
+            HttpOracle(args.http_url, args.mac)
         if args.fallback_address:
             HttpOracle("http://" + args.fallback_address, args.mac)
     except (CheckFailure, ValueError, TypeError):

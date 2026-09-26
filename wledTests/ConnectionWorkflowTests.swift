@@ -103,6 +103,57 @@ final class ConnectionWorkflowTests: XCTestCase {
         }
     }
 
+    func testSavedBluetoothDisableStopsAutomaticFallbackAndPersistsDisconnect() async throws {
+        let (persistence, device, defaults) = fixture()
+        defer { _ = persistence }
+        var clients: [WorkflowClient] = []
+        let factory: (Device, DeviceConnectionType) -> any DeviceConnectionClient = { device, route in
+            let client = WorkflowClient(device: device, route: route); clients.append(client); return client
+        }
+        let controller = DeviceConnectionController(device: device, defaults: defaults, factory: factory)
+        controller.retryDelay = .milliseconds(10)
+        controller.connectByUser()
+        clients[0].fail()
+        try await settle { clients.count == 2 }
+        clients[1].ready()
+        try await settle { controller.deviceState.activeTransport == .ble }
+        controller.deviceState.bluetoothDisabledAction()
+        XCTAssertTrue(controller.deviceState.manuallyDisconnected)
+        XCTAssertFalse(controller.deviceState.isOnline)
+        XCTAssertTrue(clients[1].destroyed)
+        XCTAssertTrue(controller.deviceState.recoveryMessage?.contains("turned off") == true)
+        clients[1].fail() // The deliberate radio shutdown may deliver a late callback.
+        controller.connect()
+        controller.deviceState.openAction()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(clients.count, 2)
+        controller.destroy()
+        let restored = DeviceConnectionController(device: device, defaults: defaults, factory: factory)
+        restored.connect()
+        restored.deviceState.openAction()
+        XCTAssertEqual(clients.count, 2)
+        restored.connectByUser()
+        XCTAssertEqual(clients.count, 3)
+        restored.destroy()
+    }
+
+    func testDisablingBluetoothWhileUsingWiFiKeepsItsConnection() async throws {
+        let (persistence, device, defaults) = fixture(mode: .wifi)
+        defer { _ = persistence }
+        var clients: [WorkflowClient] = []
+        let controller = DeviceConnectionController(device: device, defaults: defaults) { device, route in
+            let client = WorkflowClient(device: device, route: route); clients.append(client); return client
+        }
+        defer { controller.destroy() }
+        controller.connectByUser()
+        clients[0].ready()
+        try await settle { controller.deviceState.isOnline }
+        controller.deviceState.bluetoothDisabledAction()
+        XCTAssertTrue(controller.deviceState.isOnline)
+        XCTAssertFalse(controller.deviceState.manuallyDisconnected)
+        XCTAssertFalse(clients[0].destroyed)
+    }
+
     func testRetriesAreBoundedAndDisconnectCancelsRetry() async throws {
         let (persistence, device, defaults) = fixture(mode: .wifi)
         defer { _ = persistence }
@@ -142,6 +193,62 @@ final class ConnectionWorkflowTests: XCTestCase {
         XCTAssertEqual(device.preferredConnectionType, .wifi, "Manual mode must not silently resolve to BLE")
     }
 
+    func testRawRequestUsesSelectedRouteAndPreservesStatusAndData() async throws {
+        let (persistence, device, defaults) = fixture(mode: .ble)
+        defer { _ = persistence }
+        var clients: [WorkflowClient] = []
+        let controller = DeviceConnectionController(device: device, defaults: defaults) { device, route in
+            let client = WorkflowClient(device: device, route: route); clients.append(client); return client
+        }
+        defer { controller.destroy() }
+        controller.connectByUser()
+        clients[0].ready()
+        try await settle { controller.deviceState.isOnline }
+        let payload = Data("{\"name\":\"Evening\"}".utf8)
+        let response = try await controller.deviceState.request(method: "POST", path: "/json/state", body: payload,
+                                                               contentType: "application/json; charset=utf-8")
+        XCTAssertEqual(clients.count, 1)
+        XCTAssertEqual(clients[0].route, .ble)
+        XCTAssertEqual(clients[0].requests.first?.2, payload)
+        XCTAssertEqual(clients[0].contentTypes.first, "application/json; charset=utf-8")
+        XCTAssertEqual(response.status, 403)
+        XCTAssertEqual(response.contentType, "application/json")
+        XCTAssertEqual(response.body, Data("{\"error\":\"locked\"}".utf8))
+    }
+
+    func testRawResponseFromRetiredRouteCannotReachScreenOrReplay() async throws {
+        let (persistence, device, defaults) = fixture(mode: .automatic)
+        defer { _ = persistence }
+        var clients: [WorkflowClient] = []
+        let controller = DeviceConnectionController(device: device, defaults: defaults) { device, route in
+            let client = WorkflowClient(device: device, route: route); clients.append(client); return client
+        }
+        defer { controller.destroy() }
+        controller.connectByUser()
+        clients[0].ready()
+        try await settle { controller.deviceState.isOnline }
+        clients[0].holdsRequests = true
+        let originalEpoch = controller.deviceState.connectionEpoch
+        let request = Task { try await controller.deviceState.request(method: "POST", path: "/json/cfg", body: Data("{}".utf8)) }
+        try await settle { clients[0].reply != nil }
+        clients[0].fail()
+        try await settle { clients.count == 2 }
+        clients[1].ready()
+        try await settle { controller.deviceState.activeTransport == .ble }
+        XCTAssertNotEqual(controller.deviceState.connectionEpoch, originalEpoch)
+        let replacementEpoch = controller.deviceState.connectionEpoch
+        clients[0].reply?.resume(returning: .init(status: 200, contentType: "application/json", body: Data("{}".utf8)))
+        clients[0].reply = nil
+        do { _ = try await request.value; XCTFail("Retired response reached the caller") }
+        catch DeviceAPIError.connectionChanged {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertTrue(clients[1].requests.isEmpty)
+        controller.disconnectByUser()
+        XCTAssertNotEqual(controller.deviceState.connectionEpoch, replacementEpoch)
+        do { _ = try await controller.deviceState.request(path: "/json"); XCTFail("Disconnected request sent") }
+        catch DeviceAPIError.disconnected {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertTrue(clients[1].requests.isEmpty)
+    }
+
     private func settle(_ predicate: () -> Bool) async throws {
         for _ in 0..<200 {
             if predicate() { return }
@@ -159,6 +266,10 @@ private final class WorkflowClient: DeviceConnectionClient {
     var onDeviceStateUpdated: ((DeviceStateInfo) -> Void)?
     var sent: [WledState] = []
     var destroyed = false
+    var requests: [(String, String, Data)] = []
+    var contentTypes: [String?] = []
+    var holdsRequests = false
+    var reply: CheckedContinuation<DeviceAPIResponse, Error>?
     init(device: Device, route: DeviceConnectionType) { deviceState = DeviceWithState(initialDevice: device); self.route = route }
     func connect() { deviceState.websocketStatus = .connecting }
     func ready() { deviceState.websocketStatus = .connected }
@@ -170,4 +281,13 @@ private final class WorkflowClient: DeviceConnectionClient {
     func disconnect() { deviceState.websocketStatus = .disconnected }
     func destroy() { destroyed = true; disconnect() }
     func sendState(_ state: WledState) { sent.append(state); deviceState.isSending = true }
+    func request(method: String, path: String, body: Data) async throws -> DeviceAPIResponse {
+        requests.append((method, path, body))
+        if holdsRequests { return try await withCheckedThrowingContinuation { reply = $0 } }
+        return DeviceAPIResponse(status: 403, contentType: "application/json", body: Data("{\"error\":\"locked\"}".utf8))
+    }
+    func request(method: String, path: String, body: Data, contentType: String?) async throws -> DeviceAPIResponse {
+        contentTypes.append(contentType)
+        return try await request(method: method, path: path, body: body)
+    }
 }

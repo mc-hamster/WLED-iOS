@@ -97,6 +97,7 @@ final class BleUserInterfaceTests: XCTestCase {
         guard brightness.waitForExistence(timeout: 10), brightness.isEnabled else {
             throw UIFailure("Native Brightness slider is missing or disabled")
         }
+        try revealStudioControl(brightness)
         try wait("Native Color control is missing or disabled") {
             [self.app.buttons["Color"], self.app.colorWells["Color"]].contains { $0.exists && $0.isEnabled }
         }
@@ -106,6 +107,7 @@ final class BleUserInterfaceTests: XCTestCase {
             let target: CGFloat = baseline < 128 ? 0.75 : 0.25
             originalBrightnessValue = try sliderValue(brightness)
             brightnessChanged = true // Cleanup applies even if the gesture/readback fails.
+            try revealStudioControl(brightness, direction: .down)
             brightness.adjust(toNormalizedSliderPosition: target)
             try wait("Brightness gesture did not change the slider") {
                 (brightness.value as? String) != self.originalBrightnessValue
@@ -157,6 +159,8 @@ final class BleUserInterfaceTests: XCTestCase {
         app.terminate()
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launchEnvironment["BLE_HIL"] = "0"
+        app.launchEnvironment["BLE_HIL_ISOLATE_APP"] = "0"
+        app.launchEnvironment["WLED_STUDIO_PREVIEW"] = "0"
         app.launch()
         guard app.buttons["Add Device"].waitForExistence(timeout: 20) else {
             throw UIFailure("Device list did not appear; check device unlock and app permissions")
@@ -379,6 +383,7 @@ final class BleUserInterfaceTests: XCTestCase {
         do {
             try waitForNativeConnection()
             if brightnessChanged, let baseline = originalBrightness {
+                try revealStudioControl(app.sliders["Brightness"])
                 app.sliders["Brightness"].adjust(toNormalizedSliderPosition: CGFloat(baseline - 1) / 254)
                 Thread.sleep(forTimeInterval: 2)
                 let achieved = (try? sliderValue(app.sliders["Brightness"])) ?? "unavailable"
@@ -423,6 +428,174 @@ final class BleUserInterfaceTests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+}
+
+extension BleUserInterfaceTests {
+    /// Opt-in production UI parity checks. The Mac runner owns exact runtime
+    /// restoration and independent observation; this test makes no HTTP calls.
+    func testBluetoothStudioAndOfflineWorkspace() throws {
+        guard environment["BLE_UI_HIL"] == "1", environment["BLE_UI_MODE"] == "studio" else {
+            throw XCTSkip("Studio hardware coverage requires the UI runner's --mode studio")
+        }
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Studio BLE HIL requires a real iPhone")
+        #endif
+        continueAfterFailure = false
+        executionTimeAllowance = 900
+        deviceName = environment["BLE_UI_DEVICE_NAME"] ?? "WLED"
+        guard let baseline = Int(environment["BLE_UI_BRIGHTNESS"] ?? ""), (1...255).contains(baseline),
+              let effect = Int(environment["BLE_UI_EFFECT_TARGET"] ?? ""), (0...2).contains(effect),
+              let palette = Int(environment["BLE_UI_PALETTE_TARGET"] ?? ""), (0...2).contains(palette) else {
+            throw UIFailure("Studio run requires the runner's captured baseline and target effect/palette IDs")
+        }
+        originalBrightness = baseline
+        addTeardownBlock { [weak self] in try await self?.restoreFixture() }
+        XCUIDevice.shared.orientation = .portrait
+        try launchAtList()
+        try openFixtureFromList()
+        originalConnection = try inspectIdentityAndConnection()
+        _ = try inspectIdentityAndConnection(selecting: "Bluetooth")
+        try requireBluetoothStudio()
+        captureStudioScreen("Phone · Light · Bluetooth connected")
+        originalPower = try powerValue(app.switches["Power"])
+        try setPower(!(originalPower ?? false))
+        Thread.sleep(forTimeInterval: 1.2)
+        try setPower(originalPower ?? false)
+        Thread.sleep(forTimeInterval: 1.2)
+        let brightness = app.sliders["Brightness"]
+        try revealStudioControl(brightness)
+        originalBrightnessValue = try sliderValue(brightness)
+        brightnessChanged = true
+        brightness.adjust(toNormalizedSliderPosition: baseline < 128 ? 0.75 : 0.25)
+        try wait("Native brightness did not change") { (brightness.value as? String) != self.originalBrightnessValue }
+        let confirmedBrightness = try sliderValue(brightness)
+        try selectStudioSection("Effects")
+        try chooseCatalogValue(kind: "effect", id: effect, title: "Effects")
+        try chooseCatalogValue(kind: "palette", id: palette, title: "Palettes")
+        captureStudioScreen("Phone · Effects · Confirmed effect and palette")
+        note("Changed power, brightness, effect and palette with Bluetooth selected. Catalog selection is confirmed by the native /json readback.", name: "Bluetooth Studio controls")
+
+        try selectStudioSection("Scenes")
+        try wait("Scene library did not finish loading", timeout: 45) {
+            self.app.textFields["Find a scene"].exists || self.app.staticTexts["A place for your favorites"].exists
+        }
+        try revealStudioControl(app.buttons["Scene options"])
+        captureStudioScreen("Phone · Scenes · Device library")
+        app.buttons["Scene options"].tap()
+        try tapVisibleButton("Save current light")
+        guard app.navigationBars["Save a scene"].waitForExistence(timeout: 10) else { throw UIFailure("Save scene sheet did not open") }
+        let name = app.textFields["Give this moment a name"]
+        guard name.waitForExistence(timeout: 10) else { throw UIFailure("Scene name field is missing") }
+        name.tap()
+        name.typeText("UI coverage — do not save")
+        app.navigationBars["Save a scene"].buttons["Cancel"].tap()
+        note("Read the real preset library, opened the save sheet, entered a name, then cancelled. No preset/settings writes are performed by this UI scenario.", name: "Scene library without persisted changes")
+
+        try selectStudioSection("Light")
+        try requireBluetoothStudio()
+        let advanced = app.buttons["studio-advanced-controls"]
+        try revealStudioControl(advanced)
+        advanced.tap()
+        try workspaceDestination("Device settings")
+        let web = app.webViews.firstMatch
+        guard web.waitForExistence(timeout: 20), web.buttons["LED & Hardware"].waitForExistence(timeout: 30) else {
+            throw UIFailure("Offline settings interface did not load over Bluetooth")
+        }
+        captureStudioScreen("Phone · Offline Workspace · Settings")
+        try workspaceDestination("All controls")
+        let effects = web.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Effects")).firstMatch
+        guard effects.waitForExistence(timeout: 45) else { throw UIFailure("Offline full controls did not load") }
+        effects.tap()
+        try wait("Offline full controls did not read the real effect catalog", timeout: 30) {
+            web.staticTexts["Solid"].exists || web.staticTexts["Breathe"].exists
+        }
+        captureStudioScreen("Phone · Offline Workspace · Full controls")
+        try workspaceDestination("Custom palettes")
+        try wait("Offline palette editor did not load", timeout: 30) { web.buttons["Generate"].isHittable && web.staticTexts["WLED Palette Editor"].exists }
+        captureStudioScreen("Phone · Offline Workspace · Palette editor")
+        note("Opened packaged settings, full controls with real catalogs, and custom palettes while Bluetooth preference was pinned. No device HTTP path was selected.", name: "Offline Workspace")
+
+        // Recreate the entire app connection to exclude optimistic SwiftUI state.
+        try launchAtList()
+        try openFixtureFromList()
+        try requireBluetoothStudio()
+        try revealStudioControl(brightness)
+        try wait("Brightness changed after a fresh Bluetooth connection") { (brightness.value as? String) == confirmedBrightness }
+        try selectStudioSection("Effects")
+        try verifyCatalogSelection(kind: "effect", id: effect, title: "Effects")
+        try verifyCatalogSelection(kind: "palette", id: palette, title: "Palettes")
+        note("Brightness/effect/palette matched after terminating and relaunching the production app and reconnecting over Bluetooth.", name: "Authoritative reconnect readback")
+    }
+
+    private enum StudioScrollDirection { case up, down }
+
+    private func captureStudioScreen(_ name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func revealStudioControl(_ element: XCUIElement, direction: StudioScrollDirection = .up) throws {
+        guard element.waitForExistence(timeout: 15) else { throw UIFailure("Studio control missing: \(element.identifier)") }
+        for _ in 0..<10 {
+            if element.isHittable { return }
+            if direction == .up { app.swipeUp() } else { app.swipeDown() }
+        }
+        throw UIFailure("Studio control cannot be reached: \(element.identifier)")
+    }
+
+    private func selectStudioSection(_ title: String) throws {
+        let section = app.segmentedControls.buttons[title]
+        try revealStudioControl(section, direction: .down)
+        section.tap()
+    }
+
+    private func requireBluetoothStudio() throws {
+        try waitForNativeConnection()
+        guard !app.staticTexts["Connected via Wi-Fi"].firstMatch.exists else { throw UIFailure("Studio coverage escaped the Bluetooth route") }
+    }
+
+    private func chooseCatalogValue(kind: String, id: Int, title: String) throws {
+        let picker = app.buttons["studio-\(kind)-picker"]
+        try revealStudioControl(picker)
+        picker.tap()
+        guard app.navigationBars[title].waitForExistence(timeout: 10) else {
+            throw UIFailure("The \(kind) catalog did not open after tapping its row")
+        }
+        let target = app.buttons["studio-catalog-\(kind)-\(id)"]
+        guard target.waitForExistence(timeout: 30), target.isEnabled else { throw UIFailure("Requested \(kind) was not advertised") }
+        target.tap()
+        try wait("Catalog selection was not confirmed", timeout: 30) { !self.app.navigationBars[title].exists }
+        try verifyCatalogSelection(kind: kind, id: id, title: title)
+        Thread.sleep(forTimeInterval: 1.2)
+    }
+
+    private func verifyCatalogSelection(kind: String, id: Int, title: String) throws {
+        try requireBluetoothStudio()
+        let picker = app.buttons["studio-\(kind)-picker"]
+        try revealStudioControl(picker)
+        picker.tap()
+        guard app.navigationBars[title].waitForExistence(timeout: 10) else {
+            throw UIFailure("The \(kind) catalog did not reopen for readback")
+        }
+        let target = app.buttons["studio-catalog-\(kind)-\(id)"]
+        guard target.waitForExistence(timeout: 30), target.isSelected else { throw UIFailure("Confirmed \(kind) selection does not match the device") }
+        app.navigationBars[title].buttons["Done"].tap()
+    }
+
+    private func workspaceDestination(_ title: String) throws {
+        let destinations = app.navigationBars.buttons["Workspace destinations"]
+        guard destinations.waitForExistence(timeout: 15) else { throw UIFailure("Workspace navigation is unavailable") }
+        destinations.tap()
+        try tapVisibleButton(title)
+    }
+
+    private func tapVisibleButton(_ title: String) throws {
+        let matches = app.buttons.matching(NSPredicate(format: "label == %@", title))
+        try wait("Expected unique visible button: \(title)") { matches.allElementsBoundByIndex.filter(\.isHittable).count == 1 }
+        matches.allElementsBoundByIndex.first(where: \.isHittable)?.tap()
     }
 }
 

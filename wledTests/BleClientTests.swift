@@ -109,7 +109,7 @@ struct BleClientTests {
         let state = try JSONDecoder().decode(WledState.self, from: Data(command.2.utf8))
         #expect(state.isOn == false)
         #expect(state.brightness == 42)
-        #expect(session.requests.last?.1 == "/json")
+        #expect(session.requests.last?.1 == "/json/si")
         client.destroy()
     }
 
@@ -160,7 +160,7 @@ struct BleClientTests {
         #expect(segment.effectSpeed == 55)
         #expect(segment.palette == 6)
         #expect(segment.colors == [[9, 10, 11], [5, 6, 7, 8]])
-        #expect(session.requests.last?.1 == "/json")
+        #expect(session.requests.last?.1 == "/json/si")
     }
 
     @Test func heldPostKeepsDifferentSegmentIDsAndExplicitFalseAndZero() async throws {
@@ -209,6 +209,43 @@ struct BleClientTests {
         #expect(repeated.segment?.count == 2)
         #expect(repeated.segment?[0].isOn == false)
         #expect(repeated.segment?[1].isOn == true)
+    }
+
+    @Test func catalogRequestsShareQueueWithControlWrites() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let session = TestBleConnection()
+        let client = BleClient(device: device(in: persistence), session: session)
+        defer { client.destroy() }
+        client.connect()
+        while !client.deviceState.isOnline { await Task.yield() }
+        session.deferNextPost = true
+        client.sendState(WledState(brightness: 42))
+        while session.reply == nil { await Task.yield() }
+        let catalog = Task { try await client.request(method: "GET", path: "/json/effects") }
+        for _ in 0..<10 { await Task.yield() }
+        #expect(session.requests.map(\.1) == ["/json/si", "/json/state"])
+        let held = try #require(session.reply)
+        session.reply = nil
+        held.resume(returning: session.response())
+        #expect(try await catalog.value.status == 200)
+        while client.deviceState.isSending { await Task.yield() }
+        #expect(session.requests.map(\.1) == ["/json/si", "/json/state", "/json/effects", "/json/si"])
+        #expect(client.deviceState.isOnline)
+    }
+
+    @Test func rawRequestsRejectInvalidUTF8WithoutTouchingDevice() async throws {
+        let persistence = PersistenceController(inMemory: true)
+        let session = TestBleConnection()
+        let client = BleClient(device: device(in: persistence), session: session)
+        defer { client.destroy() }
+        client.connect()
+        while !client.deviceState.isOnline { await Task.yield() }
+        do {
+            _ = try await client.request(method: "POST", path: "/json/state", body: Data([0xFF]))
+            Issue.record("Invalid UTF-8 reached BLE")
+        } catch DeviceAPIError.invalidUTF8 {} catch { Issue.record("Unexpected error: \(error)") }
+        #expect(session.requests.count == 1)
+        #expect(client.deviceState.isOnline)
     }
 
     @Test func emptyColorSlotsPreserveIndependentPendingColors() {

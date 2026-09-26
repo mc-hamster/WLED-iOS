@@ -22,7 +22,7 @@ class HostedHarnessTests(unittest.TestCase):
             "TestingEnvironmentVariables": {"BLE_HIL": "1", "BLE_HIL_ISOLATE_APP": "0"},
         }]}]}
         original = copy.deepcopy(base)
-        for mode in ("unit", "commissioning", "functional", "reboot"):
+        for mode in ("unit", "commissioning", "functional", "workspace", "reboot"):
             with self.subTest(mode=mode):
                 document = hil.derive_configuration(base, Path("/tmp/unused"), mode, {"BLE_HIL_MAC": "a4cb8fdb2cb8"})
                 target = list(hil.targets(document))[0]

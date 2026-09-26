@@ -25,6 +25,9 @@ SNAPSHOT = {'info': {'mac': MAC, 'uptime': 1000, 'live': False, 'name': 'WLED'},
   'ledmap': 0, 'nl': {'on': False, 'dur': 60, 'mode': 1, 'tbri': 0, 'rem': -1},
   'udpn': {'send': True, 'recv': True, 'sgrp': 1, 'rgrp': 1}, 'lor': 0, 'mainseg': 0,
   'seg': [{'id': 0, 'frz': True, 'col': [[255, 0, 0]], 'fx': 0, 'on': True}]}}
+STUDIO_SNAPSHOT = copy.deepcopy(SNAPSHOT)
+STUDIO_SNAPSHOT['state']['seg'][0].update(pal=0, sx=100, ix=140, c1=30, c2=60, c3=10,
+                                         o1=True, o2=False, o3=True, m12=2, si=1, rev=True, mi=False)
 BASE = {'TestConfigurations': [{'TestTargets': [{'BlueprintName': 'WLEDUIHILTests',
  'IsUITestBundle': True, 'UITargetAppPath': '__TESTROOT__/WLED.app',
  'TestHostPath': '__TESTROOT__/Runner.app', 'TestBundlePath': '__TESTHOST__/PlugIns/UITest.xctest',
@@ -52,6 +55,7 @@ class FakeOracle(ui.HttpOracle):
         self.process = types.SimpleNamespace(pid=99999999, returncode=None)
         self.failure = None
         self.corrupt_after = False
+        self.studio = False
     async def request(self, update=None):
         self.calls.append(copy.deepcopy(update))
         if update is not None:
@@ -60,7 +64,7 @@ class FakeOracle(ui.HttpOracle):
             if 'seg' in update:
                 for segment in update['seg']:
                     current = next(s for s in self.value['state']['seg'] if s['id'] == segment['id'])
-                    current.update(segment)
+                    current.update({key: value for key, value in segment.items() if key != 'fxdef'})
             if 'udpn' in update:
                 self.value['state']['udpn'].update({k: v for k, v in update['udpn'].items() if k != 'nn'})
             if self.corrupt_after and 'on' in update:
@@ -72,6 +76,9 @@ class FakeOracle(ui.HttpOracle):
                 raise self.failure
             self.value['state'].update(on=self.polls > 1, bri=96)
             self.value['state']['seg'][0]['frz'] = False
+            if self.studio:
+                self.value['state']['seg'][0].update(fx=2, pal=2, sx=128, ix=128, c1=128, c2=128, c3=16,
+                                                   o1=False, o2=False, o3=False, m12=0, rev=False)
             if self.polls >= 2:
                 self.running = False
                 self.process.returncode = 0
@@ -92,6 +99,7 @@ class UiHilRunnerTests(unittest.IsolatedAsyncioTestCase):
 
     async def run_case(self, *, failure=None, summary=None, corrupt=False, snapshot=None):
         fake = FakeOracle(self.args.http_url, MAC)
+        fake.studio = getattr(self.args, 'mode', 'controls') == 'studio'
         fake.failure = failure; fake.corrupt_after = corrupt
         if snapshot is not None: fake.value = copy.deepcopy(snapshot)
         report = {'status': 'preparing'}
@@ -170,6 +178,131 @@ class UiHilRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report['status'], 'prepared_no_hardware')
         self.assertEqual(fake.calls, [])
         launcher.assert_not_called()
+
+    async def test_studio_restores_effect_defaults_and_requires_observed_catalog_targets(self):
+        self.args.mode = 'studio'
+        report, fake, _ = await self.run_case(snapshot=STUDIO_SNAPSHOT)
+        self.assertEqual(report['status'], 'passed')
+        self.assertEqual(fake.value['state'], STUDIO_SNAPSHOT['state'])
+        self.assertTrue(report['evidence']['observed_effect_target'])
+        self.assertTrue(report['evidence']['observed_palette_target'])
+        baseline = ui.fixture_baseline(STUDIO_SNAPSHOT, MAC, studio=True)
+        samples = [{'ok': True, 'on': False, 'bri': 96, 'uptime': 1001, 'segment_id': 0, 'fx': 2, 'pal': 0},
+                   {'ok': True, 'on': True, 'bri': 96, 'uptime': 1002, 'segment_id': 0, 'fx': 2, 'pal': 0}]
+        self.assertFalse(ui.evidence(samples, baseline, True)['passed'])
+
+    def test_studio_configuration_pins_mode_and_clears_simulator_fixture(self):
+        self.args.mode = 'studio'
+        baseline = ui.fixture_baseline(STUDIO_SNAPSHOT, MAC, studio=True)
+        original = copy.deepcopy(BASE)
+        next(ui.common.targets(original))['UITargetAppEnvironmentVariables']['WLED_STUDIO_PREVIEW'] = '1'
+        config = ui.ui_configuration(original, self.root, self.args, baseline)
+        target = next(ui.common.targets(config))
+        self.assertEqual(target['OnlyTestIdentifiers'], [ui.STUDIO_SELECTOR])
+        self.assertEqual(target['EnvironmentVariables']['BLE_UI_MODE'], 'studio')
+        self.assertEqual(target['EnvironmentVariables']['BLE_UI_EFFECT_TARGET'], '2')
+        self.assertEqual(target['EnvironmentVariables']['BLE_UI_PALETTE_TARGET'], '2')
+        self.assertNotIn('WLED_STUDIO_PREVIEW', target['UITargetAppEnvironmentVariables'])
+        self.assertFalse(baseline['restore']['seg'][0]['fxdef'])
+        self.assertEqual(baseline['restore']['seg'][0]['m12'], 2)
+
+    async def test_usb_oracle_proves_identity_before_write_and_never_needs_http(self):
+        class FakeSerial:
+            def __init__(self, **kwargs):
+                self.output = bytearray()
+                self.writes = []
+                self.closed = False
+                self.mac = MAC
+            def open(self): pass
+            def close(self): self.closed = True
+            def reset_input_buffer(self): self.output.clear()
+            @property
+            def in_waiting(self): return len(self.output)
+            def write(self, data):
+                self.writes.append(json.loads(data))
+                reply = copy.deepcopy(SNAPSHOT)
+                reply['info']['mac'] = self.mac
+                self.output.extend(b'noise from diagnostics\n' + json.dumps(reply).encode() + b'\n')
+                return len(data)
+            def read(self, count):
+                chunk = bytes(self.output[:count]); del self.output[:count]; return chunk
+        connection = FakeSerial()
+        with patch.dict(sys.modules, {'serial': types.SimpleNamespace(Serial=lambda **kwargs: connection)}):
+            oracle = ui.SerialOracle('/dev/cu.fixture', 115200, MAC)
+            await oracle.write({'on': False})
+            self.assertEqual(connection.writes[0], {'v': True})
+            self.assertEqual(connection.writes[1], {'on': False, 'tt': 0, 'v': True, 'udpn': {'nn': True}})
+            self.assertTrue(connection.dtr)
+            self.assertFalse(connection.rts)
+            connection.mac = '000000000000'
+            with self.assertRaises(ui.CheckFailure): await oracle.write({'on': True})
+            self.assertEqual(len(connection.writes), 3, 'Identity failure permits only the read, never a mutation')
+            await oracle.close()
+            self.assertTrue(connection.closed)
+
+    async def test_usb_restore_streams_through_bounded_firmware_receive_queue(self):
+        class BoundedSerial:
+            def __init__(self):
+                self.pending = bytearray()
+                self.document = bytearray()
+                self.output = bytearray()
+                self.received = []
+                self.dropped = 0
+                self.largest_write = 0
+            def open(self): pass
+            def close(self): pass
+            def reset_input_buffer(self): self.output.clear()
+            @property
+            def in_waiting(self): return len(self.output)
+            def write(self, data):
+                self.largest_write = max(self.largest_write, len(data))
+                available = 256 - len(self.pending)
+                self.pending.extend(data[:available])
+                self.dropped += max(0, len(data) - available)
+                # Simulate the firmware handling the last packet. Earlier
+                # packets are consumed while the host yields between writes.
+                if self.pending.endswith(b'\n'): self.consume(0)
+                return len(data)
+            def consume(self, delay):
+                if delay >= 0.1: self.document.clear()  # WLED Stream timeout.
+                self.document.extend(self.pending)
+                self.pending.clear()
+                if self.document.endswith(b'\n'):
+                    command = json.loads(self.document)
+                    self.document.clear()
+                    self.received.append(command)
+                    reply = copy.deepcopy(STUDIO_SNAPSHOT)
+                    reply['state']['on'] = command.get('on', reply['state']['on'])
+                    self.output.extend(json.dumps(reply).encode() + b'\n')
+            def read(self, count):
+                chunk = bytes(self.output[:count]); del self.output[:count]; return chunk
+
+        snapshot = copy.deepcopy(STUDIO_SNAPSHOT)
+        snapshot['state']['seg'] *= 4
+        snapshot['state']['seg'] = [dict(segment, id=index) for index, segment in enumerate(snapshot['state']['seg'])]
+        update = ui.fixture_baseline(snapshot, MAC, studio=True)['restore']
+        update['on'] = False
+        raw = json.dumps(update).encode() + b'\n'
+        self.assertGreater(len(raw), 256)
+        unpaced = BoundedSerial()
+        unpaced.write(raw)
+        self.assertGreater(unpaced.dropped, 0, 'The fixture must reproduce a single-write RX overflow')
+        self.assertFalse(unpaced.received)
+
+        connection = BoundedSerial()
+        with patch.dict(sys.modules, {'serial': types.SimpleNamespace(Serial=lambda **kwargs: connection)}), \
+             patch.object(ui.time, 'sleep', side_effect=connection.consume) as pause:
+            oracle = ui.SerialOracle('/dev/cu.fixture', 115200, MAC)
+            confirmed = await oracle.write(update)
+            self.assertFalse(confirmed['state']['on'])
+            self.assertEqual(connection.dropped, 0)
+            self.assertLessEqual(connection.largest_write, 64)
+            self.assertEqual(connection.received[0], {'v': True})
+            self.assertEqual(connection.received[1], dict(update, tt=0, v=True,
+                udpn=dict(update['udpn'], nn=True)))
+            self.assertTrue(pause.called)
+            self.assertTrue(all(call.args == (0.01,) for call in pause.call_args_list))
+            await oracle.close()
 
     async def test_http_framing_and_identity(self):
         payload = json.dumps(SNAPSHOT).encode()

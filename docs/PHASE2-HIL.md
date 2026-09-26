@@ -104,6 +104,35 @@ actual passing hardware test; an empty or skipped hardware run is a failure.
 The original `.xctestrun` is preserved. Shell environment alone is insufficient
 unless Xcode forwards it into the test process.
 
+The separate Bluetooth workspace test uses the production `BleClient`, shared
+request queue, and app workspace transfer helpers without making HTTP requests:
+
+```sh
+python3 scripts/run_ble_hil.py --xctestrun "$HIL_XCTESTRUN" \
+  --device "$HIL_PHONE_UDID" --mode workspace \
+  --fixture-name WLED-db2cb8 --mac a4cb8fdb2cb8
+```
+
+This selects `WLEDTests/BleHardwareTests/testWorkspaceBluetoothParity`; it is not
+included in `full` mode. It verifies capabilities, complete effect/metadata/palette
+catalogs, palette data, live pixels, settings JavaScript, and SHA-verified file
+reads. Before any write it checks identity and idle persistence, saves protected
+local snapshots of API-visible configuration, presets, and runtime state in the
+test app's `Documents/WorkspaceHIL/<run UUID>`, and confirms its unique temporary
+file does not exist. The file test uploads 12,345 binary bytes, reads them back,
+replaces that same file with an empty file, then deletes it. Cleanup runs even
+after an ambiguous response and verifies the temporary file is absent and the
+configuration, presets, and runtime controls are unchanged. Snapshots are excluded
+from iCloud backup and their contents are never attached or printed; the result
+attachment contains counts, digests, and cleanup status only.
+
+The workspace test does not submit a PIN, change settings/presets, reboot, or
+change the lights. A PIN-locked fixture verifies that protected reads return 401
+then skips the file lifecycle; the runner reports this as incomplete, not a pass.
+Use a dedicated, already commissioned fixture without a settings PIN for full
+workspace coverage. Commissioning and the physical setup must be complete before
+starting this mode; `--prepare-only` remains available without touching hardware.
+
 The runner prints its unique run directory. Query it from another terminal:
 
 ```sh
@@ -123,6 +152,54 @@ devices from connecting while tests own the BLE session. Hardware access remains
 a separate opt-in: unit mode sets `BLE_HIL=0` and excludes the hardware test class.
 The separate UI runner clears inherited hosted-test variables and exercises the
 normal application screens.
+
+### Bluetooth-only Studio UI acceptance
+
+Build the separate `wled-ble-ui` scheme for the physical iPhone, then run its
+signed `.xctestrun` with `scripts/run_ble_ui_hil.py --mode studio`. This selects
+`BleUserInterfaceTests/testBluetoothStudioAndOfflineWorkspace`. The saved app
+entry must already exist, have the expected MAC, and support Bluetooth. The
+test chooses the Bluetooth preference before changing any light controls; it
+never chooses Wi-Fi or Automatic during acceptance. The previous saved app
+preference is restored in teardown.
+
+When the board has no reachable Wi-Fi connection, use its USB JSON API as the
+independent observation/restoration channel. This requires Python with
+`pyserial`, an exclusive serial port, and the iPhone as the only BLE central:
+
+```sh
+python3 scripts/run_ble_ui_hil.py --mode studio \
+  --xctestrun "$HIL_UI_XCTESTRUN" --device "$HIL_PHONE_UDID" \
+  --serial-port /dev/cu.usbmodem2101 --serial-baud 115200 \
+  --mac a4cb8fdb2cb8 --advertised-name WLED-db2cb8
+```
+
+Add `--device-name` when the saved app entry differs from the firmware name.
+Stop other serial readers first. The runner keeps RTS low and DTR high for native
+USB CDC readiness; it sends no reset or baud-change command. Every write follows
+an independent MAC identity check. Commands are paced in 64-byte packets with
+10 ms gaps to avoid overflowing the firmware's 256-byte USB receive queue.
+Verbose acknowledgements and exact restoration readbacks remain required.
+USB reads use `{ "v": true }` and are bounded
+to three seconds. The iPhone operates the production app; it receives neither a
+serial interface nor a test-only device model.
+
+Studio coverage changes power, brightness, effect and palette through native
+controls, verifies the catalog selection against device readback, and confirms
+the values again after app termination/relaunch. It reads Scenes, enters and
+cancels a save form, and opens packaged settings, full controls with the real
+catalog, and the custom palette editor. This mode performs no scene or settings
+writes and does not claim scene save/delete coverage.
+
+The runner observes both power states, changed brightness, and the expected
+effect/palette IDs. It suppresses UDP sending before UI mutations and restores
+the captured runtime values afterward, including every effect default field
+that native effect selection may change: custom sliders/options, mapping,
+sound simulation, reverse and mirror flags. Exact comparison includes every
+serialized field of every segment. Failure, timeout or cancellation still runs
+bounded restoration; a skipped XCTest, missed required observation, reboot or
+inexact restoration cannot pass. The default `controls` mode continues to cover
+explicit Wi-Fi/Bluetooth transport switching and foreground reconnection.
 
 The hosted API tests disable the idle timer and restore its previous value
 afterward. They exercise foreground acceptance. The separate UI suite below

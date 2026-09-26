@@ -40,6 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HARDWARE_CLASS = "BleHardwareTests"
 METHODS = {"commissioning": "testCommissioningAndCapabilities",
            "functional": "testFunctionalAPIAndSoak",
+           "workspace": "testWorkspaceBluetoothParity",
            "reboot": "testRebootRecovery"}
 
 
@@ -286,7 +287,7 @@ def parse_args(argv=None):
     parser.add_argument("--status", type=Path, help="Read a previous run's status; no commands are executed")
     parser.add_argument("--xctestrun", type=Path, help="Signed build-for-testing output; never modified")
     parser.add_argument("--device", help="Physical iPhone UDID")
-    parser.add_argument("--mode", choices=("commissioning", "functional", "reboot", "unit", "full"), default="full")
+    parser.add_argument("--mode", choices=("commissioning", "functional", "workspace", "reboot", "unit", "full"), default="full")
     parser.add_argument("--output", type=Path, help="New run directory; defaults to build/phase2/runs/<unique timestamp>")
     parser.add_argument("--fixture-name", default="WLED-db2cb8")
     parser.add_argument("--mac", default="a4cb8fdb2cb8")

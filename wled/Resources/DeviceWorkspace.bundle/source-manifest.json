@@ -1,0 +1,261 @@
+{
+  "repository": "mc-hamster/WLED",
+  "revision": "e3754d5ca81d5dd2751b6f0a3da05973316652b9",
+  "files": [
+    {
+      "path": "404.htm",
+      "sha256": "38cc047eefa8ca6e6f5d1937ffcb65a6ae8823e0a39652944a0af52ea1f85005",
+      "bundled_sha256": "38cc047eefa8ca6e6f5d1937ffcb65a6ae8823e0a39652944a0af52ea1f85005"
+    },
+    {
+      "path": "common.js",
+      "sha256": "3022343cd98c433d772029106b6267c8865fbdadec10f96c896aa4c1c5a4286c",
+      "bundled_sha256": "3022343cd98c433d772029106b6267c8865fbdadec10f96c896aa4c1c5a4286c"
+    },
+    {
+      "path": "cpal/cpal.htm",
+      "sha256": "b40670af15b498a5eccb0f93bdc72246e11a9935370fbd74e005f36fc167a35e",
+      "bundled_sha256": "b40670af15b498a5eccb0f93bdc72246e11a9935370fbd74e005f36fc167a35e"
+    },
+    {
+      "path": "dmxmap.htm",
+      "sha256": "2b605d60dc1186e0e589d5fd933388e580721dbb15513b49fa55bb25f1065539",
+      "bundled_sha256": "620dcbed3a8c9c966755b7a76606093eda7d90d14b14cc19307b9fa196ede748"
+    },
+    {
+      "path": "edit.htm",
+      "sha256": "84c023877976e1e7e3f1435ad80ed8d09b706c770530cfa55511a70b1a42bed5",
+      "bundled_sha256": "714971908f737508e5a6bdfa729cf598fa3348d8221087f8ce3a56c9bc6f213a"
+    },
+    {
+      "path": "favicon.ico",
+      "sha256": "ab175729bdd1b30b2bbd042519f5b7c4177b9d6f82f7f75791d0542942432c1c",
+      "bundled_sha256": "ab175729bdd1b30b2bbd042519f5b7c4177b9d6f82f7f75791d0542942432c1c"
+    },
+    {
+      "path": "icons-ui/HowTo_AddNewIcons.txt",
+      "sha256": "030a56da606d146c7a8fd581fd44695310d844e921d629a447b0a0fb724fa90d",
+      "bundled_sha256": "030a56da606d146c7a8fd581fd44695310d844e921d629a447b0a0fb724fa90d"
+    },
+    {
+      "path": "icons-ui/Read Me.txt",
+      "sha256": "beea261c9bd44973c533e103fcd1a7f0021bded16442038b3efa39899e6babec",
+      "bundled_sha256": "beea261c9bd44973c533e103fcd1a7f0021bded16442038b3efa39899e6babec"
+    },
+    {
+      "path": "icons-ui/fonts/wled122.svg",
+      "sha256": "4791c654d0fdc1353248263935232afe7ad74fa0215deae6b8a5e4a14ec7cde3",
+      "bundled_sha256": "4791c654d0fdc1353248263935232afe7ad74fa0215deae6b8a5e4a14ec7cde3"
+    },
+    {
+      "path": "icons-ui/fonts/wled122.ttf",
+      "sha256": "78e813cd69ab56fcca875b4c6cb856bc79b1b39606585c6f54295e32a1df6bb8",
+      "bundled_sha256": "78e813cd69ab56fcca875b4c6cb856bc79b1b39606585c6f54295e32a1df6bb8"
+    },
+    {
+      "path": "icons-ui/fonts/wled122.woff",
+      "sha256": "69df475a7a9d6cd02485f068fd8af94e221191716013d799948433e1273eeb48",
+      "bundled_sha256": "69df475a7a9d6cd02485f068fd8af94e221191716013d799948433e1273eeb48"
+    },
+    {
+      "path": "icons-ui/fonts/wled122.woff2",
+      "sha256": "8d9f734f16a8b4c26e0ba0372ef2a61a15298b77172f16d4340a259559e9ea76",
+      "bundled_sha256": "8d9f734f16a8b4c26e0ba0372ef2a61a15298b77172f16d4340a259559e9ea76"
+    },
+    {
+      "path": "icons-ui/selection.json",
+      "sha256": "45764a3924749f1c6e720a5df0a19da4bd8c3420175aa462016da3c870a204a5",
+      "bundled_sha256": "45764a3924749f1c6e720a5df0a19da4bd8c3420175aa462016da3c870a204a5"
+    },
+    {
+      "path": "icons-ui/style.css",
+      "sha256": "2d44e507c4761002858c8fdd90db144ac96dc57f5a9eac3a1fe45dfb0dd91c2c",
+      "bundled_sha256": "2d44e507c4761002858c8fdd90db144ac96dc57f5a9eac3a1fe45dfb0dd91c2c"
+    },
+    {
+      "path": "index.css",
+      "sha256": "c42588625f91385a9a2bf1169f4abc2fe8ea9587fde356dea608f9a1e0d6898a",
+      "bundled_sha256": "c42588625f91385a9a2bf1169f4abc2fe8ea9587fde356dea608f9a1e0d6898a"
+    },
+    {
+      "path": "index.htm",
+      "sha256": "c862b9818cc7c29c2047f73561d718f4a7ecf199f2921365d168d249ad9399c4",
+      "bundled_sha256": "c862b9818cc7c29c2047f73561d718f4a7ecf199f2921365d168d249ad9399c4"
+    },
+    {
+      "path": "index.js",
+      "sha256": "2829af7a87ee1a9a535b58864201275abfbe7a37d97b0541be0eef211e728527",
+      "bundled_sha256": "d42c8c03c919441339c7f4407d8ea84d63f96476cdc6bdde483cf4bcf88f210b"
+    },
+    {
+      "path": "iro.js",
+      "sha256": "844e2a1e19ff9d3fb097b66200ba8edd80b70fa9552e3a0623ce46cd8fbc157b",
+      "bundled_sha256": "844e2a1e19ff9d3fb097b66200ba8edd80b70fa9552e3a0623ce46cd8fbc157b"
+    },
+    {
+      "path": "liveview.htm",
+      "sha256": "8ffbcc6e7b0f8bcd4047c7798be8cde5a8b71f18670c6671426175a110df4b68",
+      "bundled_sha256": "8ffbcc6e7b0f8bcd4047c7798be8cde5a8b71f18670c6671426175a110df4b68"
+    },
+    {
+      "path": "liveviewws2D.htm",
+      "sha256": "53d72b3510a62fa5f16cda3db3dd240435ce898d35b22a62e56375f042496ba4",
+      "bundled_sha256": "53d72b3510a62fa5f16cda3db3dd240435ce898d35b22a62e56375f042496ba4"
+    },
+    {
+      "path": "msg.htm",
+      "sha256": "e693dd4e873337746fb49f04e98a6e61f07d4fcce56ba3f1e14d44894f77232b",
+      "bundled_sha256": "e693dd4e873337746fb49f04e98a6e61f07d4fcce56ba3f1e14d44894f77232b"
+    },
+    {
+      "path": "pixart/boxdraw.js",
+      "sha256": "f39a88f69243b73fed360416f81cc01a62f8dfc0cf2393e52532fb4f37b02198",
+      "bundled_sha256": "f39a88f69243b73fed360416f81cc01a62f8dfc0cf2393e52532fb4f37b02198"
+    },
+    {
+      "path": "pixart/favicon-16x16.png",
+      "sha256": "6835c6cfa6c1f4b9b13516bb3984ba0c0dfdb45fbffceeb124238c580125cf2b",
+      "bundled_sha256": "6835c6cfa6c1f4b9b13516bb3984ba0c0dfdb45fbffceeb124238c580125cf2b"
+    },
+    {
+      "path": "pixart/favicon-32x32.png",
+      "sha256": "a8c0244d0977b387edba747766f511b5bcea03e99a20a27c169a4ff16190809c",
+      "bundled_sha256": "a8c0244d0977b387edba747766f511b5bcea03e99a20a27c169a4ff16190809c"
+    },
+    {
+      "path": "pixart/favicon.ico",
+      "sha256": "9bc504a803ca15a36ea8b4b527d0450c0468e50844dcf6981c0ab990e0875b99",
+      "bundled_sha256": "9bc504a803ca15a36ea8b4b527d0450c0468e50844dcf6981c0ab990e0875b99"
+    },
+    {
+      "path": "pixart/getPixelValues.js",
+      "sha256": "5365fb32072cf69becb754e0e3c359ae1dc053175060fcc0abfa29c4ccb699a2",
+      "bundled_sha256": "5365fb32072cf69becb754e0e3c359ae1dc053175060fcc0abfa29c4ccb699a2"
+    },
+    {
+      "path": "pixart/pixart.css",
+      "sha256": "c9fa5eac51688feeda19671260eea3e9e0d3a91864f05a2d86287456d834bfb9",
+      "bundled_sha256": "c9fa5eac51688feeda19671260eea3e9e0d3a91864f05a2d86287456d834bfb9"
+    },
+    {
+      "path": "pixart/pixart.htm",
+      "sha256": "3fd504ecb4ed07a050d6bd15a34df3ba39f093be20d8622d1bd896c2d80796f0",
+      "bundled_sha256": "c335d230e2cdaea89c99a78623b5899aca51a9535241cf06888f137ae9cb7f9f"
+    },
+    {
+      "path": "pixart/pixart.js",
+      "sha256": "dbf26ad7ae974f10e553bdd2657e768154a956b1159e259be6c133ad2fc138e6",
+      "bundled_sha256": "322c66c17c1df722ef492ce2736501787ef7e2b0ae09d20cfb62e56ea4e53e47"
+    },
+    {
+      "path": "pixart/site.webmanifest",
+      "sha256": "292076016aa879c471ff6e386988f94c20cad7e42b3e1b493c70921cd187a586",
+      "bundled_sha256": "292076016aa879c471ff6e386988f94c20cad7e42b3e1b493c70921cd187a586"
+    },
+    {
+      "path": "pixart/statics.js",
+      "sha256": "b99fbcce5bda420ce465e8ac72264606e09f714393a72eb1b659a324c57c3dd5",
+      "bundled_sha256": "b99fbcce5bda420ce465e8ac72264606e09f714393a72eb1b659a324c57c3dd5"
+    },
+    {
+      "path": "pixelforge/omggif.js",
+      "sha256": "40422af38ac4f3ba611f695dbae5fd602930ce5b78c710c7621828920eaf3852",
+      "bundled_sha256": "40422af38ac4f3ba611f695dbae5fd602930ce5b78c710c7621828920eaf3852"
+    },
+    {
+      "path": "pixelforge/pixelforge.htm",
+      "sha256": "ece28c3f232e9448a4dafd14d7b6454147eedd55a1122506aed8844ae3acb793",
+      "bundled_sha256": "ece28c3f232e9448a4dafd14d7b6454147eedd55a1122506aed8844ae3acb793"
+    },
+    {
+      "path": "pxmagic/pxmagic.htm",
+      "sha256": "df20fcb83ceaacb595086d1f675c21a73813ab6c5ff4dcd0721533668be15aa5",
+      "bundled_sha256": "df20fcb83ceaacb595086d1f675c21a73813ab6c5ff4dcd0721533668be15aa5"
+    },
+    {
+      "path": "rangetouch.js",
+      "sha256": "c9273053471e87a942ec3637b0d07bc0ad4019e462710fe7a73c9f1dce36824e",
+      "bundled_sha256": "c9273053471e87a942ec3637b0d07bc0ad4019e462710fe7a73c9f1dce36824e"
+    },
+    {
+      "path": "settings.htm",
+      "sha256": "16495fef333521501b74bc7dce16ce6e392cb333e63ed1c260c7d3e414029dcf",
+      "bundled_sha256": "16495fef333521501b74bc7dce16ce6e392cb333e63ed1c260c7d3e414029dcf"
+    },
+    {
+      "path": "settings_2D.htm",
+      "sha256": "af24432e50c2a608b03d901672f025463e05e6fae2c0fa5e835d875a92d40db2",
+      "bundled_sha256": "af24432e50c2a608b03d901672f025463e05e6fae2c0fa5e835d875a92d40db2"
+    },
+    {
+      "path": "settings_dmx.htm",
+      "sha256": "efeccb584d6e54bb6ed2b71c526b2b92c5f045bb1a3a1383ee9d3b33e20cb417",
+      "bundled_sha256": "efeccb584d6e54bb6ed2b71c526b2b92c5f045bb1a3a1383ee9d3b33e20cb417"
+    },
+    {
+      "path": "settings_leds.htm",
+      "sha256": "2081f224e66ac742fa0dcf57cc2f37a20ef3334104a0bf09fd86716ef912db9a",
+      "bundled_sha256": "2081f224e66ac742fa0dcf57cc2f37a20ef3334104a0bf09fd86716ef912db9a"
+    },
+    {
+      "path": "settings_pin.htm",
+      "sha256": "1b3d7b6ede9805d0ce23f052f0de35b742845b5b08f41bccf3fb8328b234a358",
+      "bundled_sha256": "1b3d7b6ede9805d0ce23f052f0de35b742845b5b08f41bccf3fb8328b234a358"
+    },
+    {
+      "path": "settings_pininfo.htm",
+      "sha256": "259f472b03f6bf8e97b14aaf80bb1db031a822f93dce220dd637b963033079c7",
+      "bundled_sha256": "259f472b03f6bf8e97b14aaf80bb1db031a822f93dce220dd637b963033079c7"
+    },
+    {
+      "path": "settings_sec.htm",
+      "sha256": "27a34a169925c3d085080172f6bea446778a7e07bb0e9466cc28a82830e6d81e",
+      "bundled_sha256": "27a34a169925c3d085080172f6bea446778a7e07bb0e9466cc28a82830e6d81e"
+    },
+    {
+      "path": "settings_sync.htm",
+      "sha256": "e5b0190cb1a6f6ba4ad5f06a24008e6044f0b410c67f4b2b8d96c92b8086e9e6",
+      "bundled_sha256": "e5b0190cb1a6f6ba4ad5f06a24008e6044f0b410c67f4b2b8d96c92b8086e9e6"
+    },
+    {
+      "path": "settings_time.htm",
+      "sha256": "3075a8b1a6595e58e981d9ec3c03cd510143471fadf5ebae7eaf887fe1db5dc3",
+      "bundled_sha256": "3075a8b1a6595e58e981d9ec3c03cd510143471fadf5ebae7eaf887fe1db5dc3"
+    },
+    {
+      "path": "settings_ui.htm",
+      "sha256": "3fe2938a879dda97b49555bae4b62948966dd7581139ffba60f82fcbb19ea4c0",
+      "bundled_sha256": "3fe2938a879dda97b49555bae4b62948966dd7581139ffba60f82fcbb19ea4c0"
+    },
+    {
+      "path": "settings_um.htm",
+      "sha256": "128d098c34c37fa79061b2e944b14c95c601228f805ac052eea1ec790fbc45c0",
+      "bundled_sha256": "128d098c34c37fa79061b2e944b14c95c601228f805ac052eea1ec790fbc45c0"
+    },
+    {
+      "path": "settings_wifi.htm",
+      "sha256": "a6debac650b85c81f6e7514f3725faa4f822775df403dbacec7d66b0c9d0a6f5",
+      "bundled_sha256": "a6debac650b85c81f6e7514f3725faa4f822775df403dbacec7d66b0c9d0a6f5"
+    },
+    {
+      "path": "style.css",
+      "sha256": "d228132e9e02e404add9c902f14608b43994b87e05f6ec95bcea690898675a28",
+      "bundled_sha256": "d228132e9e02e404add9c902f14608b43994b87e05f6ec95bcea690898675a28"
+    },
+    {
+      "path": "update.htm",
+      "sha256": "d6ec16c4130cb54d71b7a4795b394f05d4c0ea4b58cd9492262c5feb7a385f4e",
+      "bundled_sha256": "d6ec16c4130cb54d71b7a4795b394f05d4c0ea4b58cd9492262c5feb7a385f4e"
+    },
+    {
+      "path": "usermod.htm",
+      "sha256": "4b50ed34fd8e558157998a4648c2c328c19bea9c01d808309149c2e875bc3cb1",
+      "bundled_sha256": "4b50ed34fd8e558157998a4648c2c328c19bea9c01d808309149c2e875bc3cb1"
+    },
+    {
+      "path": "welcome.htm",
+      "sha256": "8d5ae9ec0454d1ec8c52863741c79ca9715008468d5c020420c93e7b1340cae8",
+      "bundled_sha256": "8d5ae9ec0454d1ec8c52863741c79ca9715008468d5c020420c93e7b1340cae8"
+    }
+  ]
+}
