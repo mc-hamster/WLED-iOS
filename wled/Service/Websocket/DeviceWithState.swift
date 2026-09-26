@@ -64,8 +64,14 @@ class DeviceWithState: ObservableObject, Identifiable {
         return device.macAddress == AP_MODE_MAC_ADDRESS
     }
 
+    /// Stock releases cannot preserve this fork's BLE bridge or update a USB-only build.
+    var canInstallStockFirmware: Bool {
+        guard let info = stateInfo?.info else { return false }
+        return device.preferredConnectionType == .wifi && info.supportsOTA && info.ble == nil
+    }
+
     var hasUpdateAvailable: Bool {
-        return stateInfo?.info.ble == nil && !device.supportsNativeBleControl && !(availableUpdateVersion ?? "").isEmpty
+        canInstallStockFirmware && !(availableUpdateVersion ?? "").isEmpty
     }
 
     // MARK: - Update pipeline code

@@ -17,9 +17,11 @@ If WLED's pairing information changes, forget that device in **iOS Settings → 
 
 ## Controls and limits
 
-Native Bluetooth control includes power, brightness, main-segment RGB color with the white channel preserved, and state updates from changes made elsewhere. It is not a tunnel for WLED's entire web interface. Preset/effect editing, full configuration pages, files, and firmware uploads continue to require Wi-Fi. The bridge's documented JSON routes remain available to other clients.
+Native Bluetooth control includes power, brightness, main-segment RGB color with the white channel preserved, and state updates from changes made elsewhere. It is not a tunnel for WLED's entire web interface. Preset/effect editing, full configuration pages, and files remain available through Wi-Fi. The bridge's documented JSON routes remain available to other clients.
 
-A saved device can have both a Wi-Fi address and a Bluetooth identifier. Choose its connection in **Edit Device**. If selecting a replacement Bluetooth identifier, the app verifies that it reports the same WLED MAC address before saving. Adding a different light belongs in the device list. Stock firmware updates are suppressed for recognized BLE firmware because those builds would remove Bluetooth.
+The supported firmware profiles are classic ESP32 with 4 MB or 8 MB flash, and ESP32-S3 with 8 MB flash and octal PSRAM. ESP32-C3 is excluded. These builds retain the other WLED features and filesystem capacity by using one larger application partition and **disabling OTA**. Firmware updates require USB. Back up configuration/presets before the initial factory-image installation; NVS replacement can reset credentials and pairing. Use the firmware repository's installation instructions for the exact board and image.
+
+A saved device can have both a Wi-Fi address and a Bluetooth identifier. Choose its connection in **Edit Device**. If selecting a replacement Bluetooth identifier, the app verifies that it reports the same WLED MAC address before saving. Adding a different light belongs in the device list. The app reads WLED's `info.opt` OTA capability bit to hide update controls and show USB guidance for builds without OTA. It also suppresses stock updates for recognized BLE firmware because those builds would remove Bluetooth, and rechecks eligibility before downloading or installing from an already-open update screen. Older Wi-Fi firmware that omits `opt` retains the upstream update behavior.
 
 Existing upstream v2 databases migrate to the new v3 schema. The earlier BLE fork's modified v2 schema is retained as v3. Legacy passkey/security-option values are cleared; iOS's system bond is unaffected.
 
@@ -40,6 +42,6 @@ xcodebuild -project wled.xcodeproj -scheme wled \
 
 The package authorization provider avoids macOS Keychain prompts for public packages in unattended builds. Plugin validation is skipped only for the pinned SwiftLint plugin, matching the upstream CI approach. For a signed device install, configure your own development team in Xcode.
 
-Review results: 41 tests / 46 parameterized executions passed on iOS 27 Simulator, including cancellation and timeout races, serialization, live-state interleaving, ATT boundaries, UTF-8, reconnect behavior, actual SQLite migration, and removal of old pairing fields. An unsigned generic iPhone build also passed. Simulator tests use a fake transport: **actual iPhone/ESP32 pairing, RF behavior, older iOS versions, and manual visual/accessibility inspection remain to be verified.**
+Review results: 44 tests / 52 parameterized executions passed on iOS 27 Simulator, including cancellation and timeout races, serialization, live-state interleaving, ATT boundaries, UTF-8, reconnect behavior, actual SQLite migration, and removal of old pairing fields. An unsigned generic iPhone build also passed. Simulator tests use a fake transport: **actual iPhone/ESP32 pairing, RF behavior, older iOS versions, and manual visual/accessibility inspection remain to be verified.**
 
 The detailed [cross-repository review and hardware acceptance matrix](https://github.com/mc-hamster/WLED/blob/ble/docs/BLUETOOTH_REVIEW.md) is also available locally at `../WLED/docs/BLUETOOTH_REVIEW.md` when both forks are checked out together. These changes have not been pushed; use that local copy until publication.

@@ -67,22 +67,31 @@ struct DeviceEditView: View {
                     .padding(.trailing, 2)
                     .padding(.bottom)
 
-                HStack {
-                    Text("Update Channel")
-                    Spacer()
-                    Picker("Update Channel", selection: $viewModel.branch) {
-                        ForEach(Branch.allCases.filter { $0 != .unknown }) { branch in
-                            Text(LocalizedStringKey(branch.nameKey))
-                                .tag(branch)
-                                .padding()
+                if device.canInstallStockFirmware {
+                    HStack {
+                        Text("Update Channel")
+                        Spacer()
+                        Picker("Update Channel", selection: $viewModel.branch) {
+                            ForEach(Branch.allCases.filter { $0 != .unknown }) { branch in
+                                Text(LocalizedStringKey(branch.nameKey))
+                                    .tag(branch)
+                                    .padding()
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .fixedSize()
                     }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
+                    .padding(.bottom)
                 }
-                .padding(.bottom)
 
-                if device.stateInfo != nil && device.device.preferredConnectionType == .wifi && device.stateInfo?.info.ble == nil {
+                if device.stateInfo?.info.supportsOTA == false {
+                    Text("Firmware updates require USB. Wireless updates are not available on this device.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.bottom)
+                }
+
+                if device.canInstallStockFirmware {
                     Card {
                         if (device.availableUpdateVersion ?? "").isEmpty {
                             DeviceNoUpdateAvailable(

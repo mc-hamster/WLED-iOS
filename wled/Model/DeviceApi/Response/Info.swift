@@ -50,6 +50,9 @@ struct Info: Decodable {
     var mac: String?
     var ipAddress: String?
     // Missing: u - UserMods
+
+    /// WLED's info.opt bit 0 indicates OTA support. Older firmware may omit opt.
+    var supportsOTA: Bool { opt.map { $0 & 0x01 != 0 } ?? true }
     
     enum CodingKeys: String, CodingKey {
         case ble

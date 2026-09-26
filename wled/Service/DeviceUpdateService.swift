@@ -2,6 +2,7 @@ import Foundation
 import CoreData
 
 enum UpdateError: LocalizedError {
+    case unsupportedFirmware
     case assetNotDetermined
     case fileNotFound
     case invalidURL
@@ -11,6 +12,8 @@ enum UpdateError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .unsupportedFirmware:
+            return String(localized: "This device cannot install stock firmware wirelessly. Use a compatible firmware build and its installation instructions.")
         case .assetNotDetermined:
             return String(localized: "Could not determine the correct firmware for this device.")
         case .fileNotFound:
@@ -89,6 +92,7 @@ class DeviceUpdateService: ObservableObject {
     }
 
     private func setupAsset() {
+        guard device.canInstallStockFirmware else { return }
         // Try to use the release variable, but fallback to the legacy platform method for
         // compatibility with WLED older than 0.15.0
         if !determineAssetByRelease() {
@@ -212,6 +216,7 @@ class DeviceUpdateService: ObservableObject {
     ///
     /// - Returns: `true` if the download succeeded, `false` otherwise.
     func downloadBinary() async -> Bool {
+        guard device.canInstallStockFirmware else { return false }
         guard let asset = asset else {
             return false
         }
@@ -251,6 +256,8 @@ class DeviceUpdateService: ObservableObject {
     ///   - onCompletion: Closure called when the update completes successfully.
     ///   - onFailure: Closure called if the update fails or the binary cannot be found.
     func installUpdate() async throws {
+        // Recheck current capabilities, including when an old update screen is still open.
+        guard device.canInstallStockFirmware else { throw UpdateError.unsupportedFirmware }
         guard let binaryURL = getPathForAsset(),
               FileManager.default.fileExists(atPath: binaryURL.path) else {
             throw UpdateError.fileNotFound
